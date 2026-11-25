@@ -432,7 +432,7 @@ func (a *Agent) finishTurn(res *TurnResult, turn int, startUsage provider.Usage,
 	res.TotalUsage = a.totalUsage
 	res.TotalCostUSD = a.totalCost
 	res.CacheHitRate = cacheHitRate(a.totalUsage)
-	res.DurationMs = res.streamDuration.Milliseconds()
+	res.DurationMs = durationMillis(res.streamDuration)
 	res.TokensPerSec = tokensPerSec(res.Usage.CompletionTokens, res.streamDuration)
 
 	if err != nil {
@@ -639,7 +639,7 @@ func (a *Agent) recordUsage(req provider.ChatRequest, u provider.Usage, turn, st
 
 	prefix, _ := provider.PrefixHash(req)
 	if a.Session != nil {
-		_ = a.Session.AppendUsage(u, cost, prefix)
+		_ = a.Session.AppendUsageWithDuration(u, cost, prefix, elapsed)
 	}
 	usage := u
 	a.emit(Event{
@@ -650,9 +650,19 @@ func (a *Agent) recordUsage(req provider.ChatRequest, u provider.Usage, turn, st
 		CostUSD:      cost,
 		TotalCostUSD: a.totalCost,
 		CacheHitRate: cacheHitRate(a.totalUsage),
-		DurationMs:   elapsed.Milliseconds(),
+		DurationMs:   durationMillis(elapsed),
 		TokensPerSec: tokensPerSec(u.CompletionTokens, elapsed),
 	})
+}
+
+func durationMillis(d time.Duration) int64 {
+	if d <= 0 {
+		return 0
+	}
+	if ms := d.Milliseconds(); ms > 0 {
+		return ms
+	}
+	return 1
 }
 
 // ---------------------------------------------------------------------------
