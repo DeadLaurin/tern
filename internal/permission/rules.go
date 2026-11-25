@@ -334,13 +334,22 @@ func matchAnyPath(patterns []string, path, workDir string) (string, bool) {
 	return "", false
 }
 
-// pathCandidates returns the cleaned forms of path that path globs are matched
-// against: as given (with ~ expanded), absolute, and workspace-relative.
+func isPathAbs(p string) bool {
+	return filepath.IsAbs(p) || strings.HasPrefix(p, "/")
+}
+
+// pathCandidates returns the cleaned slash-normalized forms of path that path
+// globs are matched against: as given (with ~ expanded), absolute, and
+// workspace-relative.
 func pathCandidates(path, workDir string) []string {
-	p := filepath.Clean(expandHome(strings.TrimSpace(path)))
+	p := filepath.ToSlash(filepath.Clean(expandHome(strings.TrimSpace(path))))
+	wd := ""
+	if strings.TrimSpace(workDir) != "" {
+		wd = filepath.ToSlash(filepath.Clean(workDir))
+	}
 	var out []string
 	add := func(v string) {
-		v = filepath.Clean(v)
+		v = filepath.ToSlash(filepath.Clean(v))
 		for _, existing := range out {
 			if existing == v {
 				return
@@ -349,16 +358,16 @@ func pathCandidates(path, workDir string) []string {
 		out = append(out, v)
 	}
 	add(p)
-	if filepath.IsAbs(p) {
-		if workDir != "" {
-			if rel, err := filepath.Rel(workDir, p); err == nil {
+	if isPathAbs(p) {
+		if wd != "" {
+			if rel, err := filepath.Rel(filepath.FromSlash(wd), filepath.FromSlash(p)); err == nil {
 				add(rel)
 			}
 		}
 		return out
 	}
-	if workDir != "" {
-		add(filepath.Join(workDir, p))
+	if wd != "" {
+		add(wd + "/" + p)
 	}
 	return out
 }
@@ -366,6 +375,8 @@ func pathCandidates(path, workDir string) []string {
 // pathGlobMatch matches a path against a glob where "*" does not cross path
 // separators and "**" does.
 func pathGlobMatch(pattern, path string) bool {
+	pattern = filepath.ToSlash(pattern)
+	path = filepath.ToSlash(path)
 	if pattern == path {
 		return true
 	}

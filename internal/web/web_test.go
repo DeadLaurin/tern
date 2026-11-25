@@ -65,7 +65,7 @@ func TestHTMLToMarkdownGolden(t *testing.T) {
 			if err != nil {
 				t.Fatalf("read golden (run go test -run TestHTMLToMarkdownGolden -update): %v", err)
 			}
-			want := strings.TrimSuffix(string(golden), "\n")
+			want := strings.TrimSuffix(strings.ReplaceAll(string(golden), "\r\n", "\n"), "\n")
 			if got != want {
 				t.Errorf("markdown mismatch\n--- got ---\n%s\n--- want ---\n%s", got, want)
 			}

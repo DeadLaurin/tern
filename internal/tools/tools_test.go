@@ -223,7 +223,7 @@ func TestRead(t *testing.T) {
 		{name: "binary", args: map[string]any{"path": "binary.bin"}, wantErr: "binary"},
 		{name: "missing arg", args: map[string]any{}, wantErr: "path"},
 		{name: "unknown arg", args: map[string]any{"path": "lines.txt", "bogus": true}, wantErr: "unknown field"},
-		{name: "missing file", args: map[string]any{"path": "nope.txt"}, wantErr: "no such file"},
+		{name: "missing file", args: map[string]any{"path": "nope.txt"}, wantErr: "nope.txt"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

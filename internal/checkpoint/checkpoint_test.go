@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"sort"
+	"strings"
 	"testing"
 )
 
@@ -101,7 +102,7 @@ func TestUndoRestoresModifiedFileAcrossTurns(t *testing.T) {
 		!rec.ExistedAfter || rec.AfterHash != hashOf("v1") {
 		t.Fatalf("unexpected turn1 record: %+v", rec)
 	}
-	if rec.BeforeMode.Perm() != 0o640 || rec.AfterMode.Perm() != 0o640 {
+	if runtime.GOOS != "windows" && (rec.BeforeMode.Perm() != 0o640 || rec.AfterMode.Perm() != 0o640) {
 		t.Fatalf("unexpected modes: before=%v after=%v", rec.BeforeMode, rec.AfterMode)
 	}
 
@@ -583,8 +584,12 @@ func TestRecordBeforeRelativePath(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if turn.Records[0].Path != expected {
-		t.Fatalf("relative path not normalized: got %q, want %q", turn.Records[0].Path, expected)
+	gotPath, err := filepath.EvalSymlinks(turn.Records[0].Path)
+	if err != nil {
+		gotPath = turn.Records[0].Path
+	}
+	if !strings.EqualFold(gotPath, expected) {
+		t.Fatalf("relative path not normalized: got %q, want %q", gotPath, expected)
 	}
 	writeTestFile(t, file, "changed", 0o644)
 	if err := CommitTurn(turn); err != nil {

@@ -10,6 +10,7 @@ import (
 func fixedHome(t *testing.T) {
 	t.Helper()
 	t.Setenv("HOME", "/home/tester")
+	t.Setenv("USERPROFILE", "/home/tester")
 }
 
 func TestParseMode(t *testing.T) {

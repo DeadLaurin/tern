@@ -473,7 +473,7 @@ func isInsideWorkspace(path, workDir string) bool {
 		return false
 	}
 	absPath := expandHome(path)
-	if !filepath.IsAbs(absPath) {
+	if !isPathAbs(absPath) {
 		absPath = filepath.Join(absWork, absPath)
 	}
 	absPath = filepath.Clean(absPath)

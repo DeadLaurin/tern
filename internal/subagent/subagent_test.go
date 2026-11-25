@@ -1238,7 +1238,7 @@ func checkGolden(t *testing.T, name, got string) {
 	if err != nil {
 		t.Fatalf("read golden %s: %v (run UPDATE_GOLDEN=1 to create)", path, err)
 	}
-	want := strings.TrimSuffix(string(data), "\n")
+	want := strings.TrimSuffix(strings.ReplaceAll(string(data), "\r\n", "\n"), "\n")
 	if got != want {
 		t.Fatalf("golden mismatch for %s:\n--- got ---\n%s\n--- want ---\n%s", name, got, want)
 	}
