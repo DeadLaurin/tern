@@ -131,6 +131,95 @@ func TestCheckModes(t *testing.T) {
 	}
 }
 
+func TestTaskAlwaysAllowedWithoutPrompt(t *testing.T) {
+	const workDir = "/work/project"
+	for _, mode := range []Mode{ModeAsk, ModeAutoEdit, ModeYolo, ModePlan} {
+		t.Run(string(mode), func(t *testing.T) {
+			e := New(Policy{Mode: mode, WorkDir: workDir})
+			// The task tool reports itself as mutating, which would otherwise
+			// prompt in ask/auto-edit or be denied in plan mode.
+			d := e.Check(CheckRequest{ToolName: "task", WorkDir: workDir})
+			if !d.IsAllow() {
+				t.Fatalf("task in %s mode: got %v, want allow", mode, d)
+			}
+			if d.Reason == "" {
+				t.Fatalf("task in %s mode returned an empty reason", mode)
+			}
+		})
+	}
+}
+
+func TestTaskExplicitDenyStillWins(t *testing.T) {
+	const workDir = "/work/project"
+	for _, mode := range []Mode{ModeAsk, ModeAutoEdit, ModeYolo, ModePlan} {
+		for _, deny := range []string{"task", "ta*"} {
+			t.Run(string(mode)+"/"+deny, func(t *testing.T) {
+				e := New(Policy{Mode: mode, WorkDir: workDir, DenyTools: []string{deny}})
+				d := e.Check(CheckRequest{ToolName: "task", WorkDir: workDir})
+				if !d.IsDeny() {
+					t.Fatalf("task denied by %q in %s mode: got %v, want deny", deny, mode, d)
+				}
+			})
+		}
+	}
+}
+
+func TestSubAgentPermissionStillEnforced(t *testing.T) {
+	const workDir = "/work/project"
+	tests := []struct {
+		name     string
+		parent   Mode
+		override string
+		forceRO  bool
+		denyTool []string
+		req      CheckRequest
+		want     DecisionKind
+	}{
+		{
+			name: "ask child cannot escalate writes", parent: ModeAsk, override: "yolo",
+			req: CheckRequest{ToolName: "write", Path: workDir + "/main.go", WorkDir: workDir}, want: DecisionAsk,
+		},
+		{
+			name: "ask child cannot escalate bash", parent: ModeAsk, override: "yolo",
+			req: CheckRequest{ToolName: "bash", Command: "npm install", WorkDir: workDir}, want: DecisionAsk,
+		},
+		{
+			name: "auto-edit child still asks for bash", parent: ModeYolo, override: "auto-edit",
+			req: CheckRequest{ToolName: "bash", Command: "npm install", WorkDir: workDir}, want: DecisionAsk,
+		},
+		{
+			name: "auto-edit child allows workspace write", parent: ModeYolo, override: "auto-edit",
+			req: CheckRequest{ToolName: "write", Path: workDir + "/main.go", WorkDir: workDir}, want: DecisionAllow,
+		},
+		{
+			name: "read-only child denies write", parent: ModeYolo, forceRO: true,
+			req: CheckRequest{ToolName: "write", Path: workDir + "/main.go", WorkDir: workDir}, want: DecisionDeny,
+		},
+		{
+			name: "read-only child denies mutating bash", parent: ModeYolo, forceRO: true,
+			req: CheckRequest{ToolName: "bash", Command: "touch x", WorkDir: workDir}, want: DecisionDeny,
+		},
+		{
+			name: "read-only child allows read-only bash", parent: ModeYolo, forceRO: true,
+			req: CheckRequest{ToolName: "bash", Command: "git status", WorkDir: workDir}, want: DecisionAllow,
+		},
+		{
+			name: "child inherits task deny", parent: ModeYolo, denyTool: []string{"task"},
+			req: CheckRequest{ToolName: "task", WorkDir: workDir}, want: DecisionDeny,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			parent := New(Policy{Mode: tt.parent, WorkDir: workDir, DenyTools: tt.denyTool})
+			child := DeriveChild(parent, tt.override, tt.forceRO)
+			if d := child.Check(tt.req); d.Kind != tt.want {
+				t.Fatalf("child Check(%+v) = %v, want %v", tt.req, d, tt.want)
+			}
+		})
+	}
+}
+
 func TestDenyRulesBeatModes(t *testing.T) {
 	workDir := t.TempDir()
 	for _, mode := range []Mode{ModeAsk, ModeAutoEdit, ModeYolo} {

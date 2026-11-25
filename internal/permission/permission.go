@@ -292,9 +292,9 @@ func (e *Evaluator) WithWorkDir(dir string) *Evaluator {
 }
 
 // Check evaluates a tool call and returns a Decision. The first matching rule
-// wins, in this order: explicit denies, built-in denies, web policy, plan
-// restrictions, explicit allows, read-only shortcuts, and finally the mode's
-// default behaviour.
+// wins, in this order: explicit denies, the auto-allowed task tool, built-in
+// denies, web policy, plan restrictions, explicit allows, read-only shortcuts,
+// and finally the mode's default behaviour.
 func (e *Evaluator) Check(req CheckRequest) Decision {
 	if e == nil {
 		e = Default()
@@ -333,7 +333,15 @@ func (e *Evaluator) Check(req CheckRequest) Decision {
 		}
 	}
 
-	// 2. Built-in safety rules (destructive bash, sensitive write paths).
+	// 2. The task tool only orchestrates sub-agents. Every tool those agents
+	// run is checked separately by DeriveChild, and plan mode forces them
+	// read-only, so delegating never needs a prompt of its own. This sits
+	// after the explicit deny checks above so denying "task" still wins.
+	if tool == "task" {
+		return decide(Allow("sub-agent tool calls are checked by the child permission evaluator"))
+	}
+
+	// 3. Built-in safety rules (destructive bash, sensitive write paths).
 	if !p.DisableDefaultDeny {
 		if command != "" {
 			if reason, ok := DefaultBashDenyReason(command); ok {
@@ -347,7 +355,7 @@ func (e *Evaluator) Check(req CheckRequest) Decision {
 		}
 	}
 
-	// 3. Web tools follow the dedicated web policy.
+	// 4. Web tools follow the dedicated web policy.
 	if req.IsWeb {
 		switch p.Web {
 		case WebPolicyAllow:
@@ -362,7 +370,7 @@ func (e *Evaluator) Check(req CheckRequest) Decision {
 		}
 	}
 
-	// 4. Plan mode is strictly read-only.
+	// 5. Plan mode is strictly read-only.
 	if mode == ModePlan {
 		if command != "" {
 			if !IsReadOnlyBashCommand(command) {
@@ -373,7 +381,7 @@ func (e *Evaluator) Check(req CheckRequest) Decision {
 		}
 	}
 
-	// 5. Explicit allows.
+	// 6. Explicit allows.
 	if tool != "" {
 		if pat, ok := matchAnyGlob(p.AllowTools, tool); ok {
 			return decide(Allow(fmt.Sprintf("tool %q is allowed by rule %q", tool, pat)))
@@ -390,7 +398,7 @@ func (e *Evaluator) Check(req CheckRequest) Decision {
 		}
 	}
 
-	// 6. Read-only operations never prompt outside plan-denied territory.
+	// 7. Read-only operations never prompt outside plan-denied territory.
 	if req.IsReadOnly {
 		return decide(Allow(fmt.Sprintf("read-only tool %q", tool)))
 	}
@@ -398,7 +406,7 @@ func (e *Evaluator) Check(req CheckRequest) Decision {
 		return decide(Allow(fmt.Sprintf("read-only command %q", command)))
 	}
 
-	// 7. Mode defaults.
+	// 8. Mode defaults.
 	switch mode {
 	case ModeYolo:
 		return decide(Allow("yolo mode allows all non-denied tool calls"))
