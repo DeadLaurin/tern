@@ -375,10 +375,7 @@ func (m *Model) approvalView() string {
 	if state == nil {
 		return ""
 	}
-	title := "⚠ Approval required"
-	if m.st.plain {
-		title = "! Approval required"
-	}
+	title := "Permission Required"
 	total := 1 + len(m.approvalQueue)
 	if total > 1 {
 		title = fmt.Sprintf("%s (1 of %d)", title, total)
@@ -430,11 +427,10 @@ func (m *Model) approvalView() string {
 	}
 
 	b.WriteString("\n")
-	b.WriteString(m.st.paint(m.st.success, "y") + m.st.paint(m.st.dim, " allow   ") +
-		m.st.paint(m.st.accent, "a") + m.st.paint(m.st.dim, " allow all for turn   ") +
-		m.st.paint(m.st.error, "n") + m.st.paint(m.st.dim, " deny   ") +
-		m.st.paint(m.st.dim, "esc deny"))
-	return b.String()
+	b.WriteString(m.st.paint(m.st.success, "[y] Allow") + m.st.paint(m.st.dim, "  ") +
+		m.st.paint(m.st.accent, "[a] Allow all this turn") + m.st.paint(m.st.dim, "  ") +
+		m.st.paint(m.st.error, "[n] Deny"))
+	return m.overlayCard(b.String())
 }
 
 func (m *Model) askView() string {
@@ -442,10 +438,7 @@ func (m *Model) askView() string {
 	if state == nil {
 		return ""
 	}
-	title := "? Question"
-	if m.st.plain {
-		title = "? Question"
-	}
+	title := "Question"
 	var b strings.Builder
 	b.WriteString(m.st.paint(m.st.info, title))
 	b.WriteString("\n\n")
@@ -467,14 +460,31 @@ func (m *Model) askView() string {
 			b.WriteString("\n")
 		}
 	}
+	b.WriteString("\n")
 	if len(state.input) > 0 {
-		b.WriteString("\n" + m.st.paint(m.st.info, "> ") + string(state.input))
-	} else if len(state.options) > 0 {
-		b.WriteString("\n" + m.st.paint(m.st.dim, "↑/↓ choose · enter select · or type a free-form answer"))
-	} else {
-		b.WriteString("\n" + m.st.paint(m.st.dim, "Type your answer and press enter · esc dismiss"))
+		b.WriteString(m.st.paint(m.st.info, "› ") + string(state.input) + "\n")
 	}
-	return b.String()
+	b.WriteString(m.st.paint(m.st.dim, "[Enter] Submit  [Esc] Cancel"))
+	if len(state.options) > 0 {
+		b.WriteString(m.st.paint(m.st.dim, "  ·  ↑/↓ choose or type a free-form answer"))
+	}
+	return m.overlayCard(b.String())
+}
+
+// overlayCard wraps modal prompt content in the same crisp framed card used by
+// the other overlays. In plain mode it stays border-free and copy-friendly.
+func (m *Model) overlayCard(content string) string {
+	if m.st.plain {
+		return content
+	}
+	width := m.width - 8
+	if width > 92 {
+		width = 92
+	}
+	if width < 36 {
+		width = 36
+	}
+	return m.st.modalBorder.Width(width).Render(content)
 }
 
 func (m *Model) diffView(diff string) string {

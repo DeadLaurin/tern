@@ -323,7 +323,7 @@ func TestApprovalPromptAllowAndDeny(t *testing.T) {
 		req := &agent.ApprovalRequest{ToolName: "bash", Command: "rm -rf build", Reason: "mutating command"}
 		m.Update(approvalRequestMsg{request: &approvalState{parent: req, response: response}})
 		view := m.View()
-		for _, want := range []string{"Approval required", "bash", "rm -rf build", "mutating command"} {
+		for _, want := range []string{"Permission Required", "bash", "rm -rf build", "mutating command"} {
 			if !strings.Contains(view, want) {
 				t.Fatalf("approval view missing %q:\n%s", want, view)
 			}
@@ -446,7 +446,7 @@ func TestReasoningAndToolToggle(t *testing.T) {
 	}})
 	m.Update(tickMsg(time.Now()))
 	view := m.View()
-	if !strings.Contains(view, "Ctrl+T to expand") {
+	if !strings.Contains(view, "^T expand") {
 		t.Fatalf("collapsed reasoning not shown:\n%s", view)
 	}
 	if !strings.Contains(view, "go test ./...") {
@@ -1245,5 +1245,274 @@ func TestApprovalAllowAllForTurn(t *testing.T) {
 	m.Update(turnDoneMsg{})
 	if m.turnAutoApprove {
 		t.Fatal("turnAutoApprove was not cleared at turn end")
+	}
+}
+
+func leadingSpaces(line string) int {
+	return len(line) - len(strings.TrimLeft(line, " "))
+}
+
+func lineContaining(view, needle string) string {
+	for _, line := range strings.Split(view, "\n") {
+		if strings.Contains(line, needle) {
+			return line
+		}
+	}
+	return ""
+}
+
+func TestLayoutColumnAlignment(t *testing.T) {
+	t.Run("plain", func(t *testing.T) {
+		m := newTestModel(t, Options{})
+		m.width = 140
+		m.height = 30
+		typeText(t, m, "hello")
+		view := m.View()
+		editorLine := lineContaining(view, "hello")
+		statusLine := lineContaining(view, "deepseek")
+		if editorLine == "" || statusLine == "" {
+			t.Fatalf("missing editor or status line:\n%s", view)
+		}
+		if leadingSpaces(editorLine) != leadingSpaces(statusLine) {
+			t.Fatalf("editor and status left edges differ: editor=%d status=%d\n%s",
+				leadingSpaces(editorLine), leadingSpaces(statusLine), view)
+		}
+		if leadingSpaces(editorLine) == 0 {
+			t.Fatalf("wide layout was not centered:\n%s", view)
+		}
+	})
+
+	t.Run("boxed", func(t *testing.T) {
+		m := newTestModel(t, Options{})
+		m.st = newStyles(false)
+		m.width = 140
+		m.height = 30
+		typeText(t, m, "hello")
+		view := m.View()
+		boxLine := lineContaining(view, "╭")
+		statusLine := lineContaining(view, "· ask")
+		if boxLine == "" || statusLine == "" {
+			t.Fatalf("missing boxed editor or status line:\n%s", view)
+		}
+		if leadingSpaces(boxLine) != leadingSpaces(statusLine) {
+			t.Fatalf("boxed editor and status left edges differ: editor=%d status=%d\n%s",
+				leadingSpaces(boxLine), leadingSpaces(statusLine), view)
+		}
+	})
+}
+
+func TestPermissionAndQuestionOverlaysAreCentered(t *testing.T) {
+	t.Run("permission", func(t *testing.T) {
+		m := newTestModel(t, Options{})
+		response := make(chan approvalResult, 1)
+		m.Update(approvalRequestMsg{request: &approvalState{
+			parent:   &agent.ApprovalRequest{ToolName: "bash", Command: "make test"},
+			response: response,
+		}})
+		view := m.View()
+		line := lineContaining(view, "Permission Required")
+		if line == "" {
+			t.Fatalf("permission overlay missing:\n%s", view)
+		}
+		if leadingSpaces(line) == 0 {
+			t.Fatalf("permission overlay not horizontally centered:\n%s", view)
+		}
+		lines := strings.Split(view, "\n")
+		row := 0
+		for i, candidate := range lines {
+			if strings.Contains(candidate, "Permission Required") {
+				row = i
+				break
+			}
+		}
+		if row < m.height/4 || row > m.height*3/4 {
+			t.Fatalf("permission overlay not vertically centered: row=%d height=%d", row, m.height)
+		}
+	})
+
+	t.Run("question", func(t *testing.T) {
+		m := newTestModel(t, Options{})
+		response := make(chan string, 1)
+		m.Update(askUserMsg{request: &askState{
+			question: "Which package?",
+			options:  []string{"tui", "agent"},
+			response: response,
+		}})
+		view := m.View()
+		line := lineContaining(view, "Which package?")
+		if line == "" {
+			t.Fatalf("question overlay missing:\n%s", view)
+		}
+		if leadingSpaces(line) == 0 {
+			t.Fatalf("question overlay not centered:\n%s", view)
+		}
+	})
+}
+
+func TestYoloToggleShortcutAndCommand(t *testing.T) {
+	m := newTestModel(t, Options{})
+	if got := m.opts.Agent.Permissions.Mode(); got != permission.ModeAsk {
+		t.Fatalf("initial mode = %q, want ask", got)
+	}
+	press(t, m, tea.KeyCtrlY)
+	if got := m.opts.Agent.Permissions.Mode(); got != permission.ModeYolo {
+		t.Fatalf("mode after ctrl+y = %q, want yolo", got)
+	}
+	if got := m.opts.Config.PermissionMode; got != permission.ModeYolo.String() {
+		t.Fatalf("config mode after ctrl+y = %q", got)
+	}
+	if view := m.View(); !strings.Contains(view, "YOLO") {
+		t.Fatalf("status bar missing YOLO indicator:\n%s", view)
+	}
+	press(t, m, tea.KeyCtrlY)
+	if got := m.opts.Agent.Permissions.Mode(); got != permission.ModeAsk {
+		t.Fatalf("mode after second ctrl+y = %q, want ask", got)
+	}
+
+	submitText(t, m, "/yolo")
+	if got := m.opts.Agent.Permissions.Mode(); got != permission.ModeYolo {
+		t.Fatalf("mode after /yolo = %q, want yolo", got)
+	}
+	submitText(t, m, "/yolo")
+	if got := m.opts.Agent.Permissions.Mode(); got != permission.ModeAsk {
+		t.Fatalf("mode after second /yolo = %q, want ask", got)
+	}
+}
+
+func TestThinkingThreeStateCycle(t *testing.T) {
+	m := newTestModel(t, Options{})
+	m.st = newStyles(false)
+	m.Update(agentEventMsg{event: agent.Event{Type: agent.EventReasoningDelta, Text: "secret reasoning"}})
+	m.Update(tickMsg(time.Now()))
+	if m.thinking != thinkingCollapsed {
+		t.Fatalf("initial thinking mode = %v, want collapsed", m.thinking)
+	}
+	view := m.View()
+	if !strings.Contains(view, "Thought") || !strings.Contains(view, "^T expand") {
+		t.Fatalf("collapsed summary missing:\n%s", view)
+	}
+	if strings.Contains(view, "secret reasoning") {
+		t.Fatalf("reasoning leaked while collapsed:\n%s", view)
+	}
+
+	press(t, m, tea.KeyCtrlT)
+	if m.thinking != thinkingExpanded {
+		t.Fatalf("thinking mode = %v, want expanded", m.thinking)
+	}
+	view = m.View()
+	if !strings.Contains(view, "secret reasoning") || !strings.Contains(view, "│") {
+		t.Fatalf("expanded reasoning missing:\n%s", view)
+	}
+
+	press(t, m, tea.KeyCtrlT)
+	if m.thinking != thinkingHidden {
+		t.Fatalf("thinking mode = %v, want hidden", m.thinking)
+	}
+	view = m.View()
+	if strings.Contains(view, "secret reasoning") || strings.Contains(view, "Thought") {
+		t.Fatalf("reasoning still visible while hidden:\n%s", view)
+	}
+
+	press(t, m, tea.KeyCtrlT)
+	if m.thinking != thinkingCollapsed {
+		t.Fatalf("thinking mode = %v, want collapsed again", m.thinking)
+	}
+}
+
+func TestScrollingDoesNotSnapBackToBottom(t *testing.T) {
+	m := newTestModel(t, Options{})
+	m.height = 24
+	for i := 0; i < 60; i++ {
+		m.addInfo("history line " + strings.Repeat("x", 40))
+	}
+	m.View()
+	if !m.followTail {
+		t.Fatal("initial view should follow the tail")
+	}
+	press(t, m, tea.KeyPgUp)
+	if m.followTail {
+		t.Fatal("PgUp did not disable followTail")
+	}
+	afterPgUp := m.viewport.YOffset
+	if afterPgUp <= 0 {
+		t.Fatalf("PgUp did not scroll up: offset=%d", afterPgUp)
+	}
+
+	m.Update(tickMsg(time.Now()))
+	m.Update(agentEventMsg{event: agent.Event{Type: agent.EventTextDelta, Text: "streaming while scrolled up"}})
+	m.View()
+	if m.followTail {
+		t.Fatal("tick/streaming re-enabled followTail while scrolled up")
+	}
+	if m.viewport.YOffset != afterPgUp {
+		t.Fatalf("scroll offset jumped after tick/stream: got %d want %d", m.viewport.YOffset, afterPgUp)
+	}
+	if m.viewport.AtBottom() {
+		t.Fatal("viewport snapped back to the bottom")
+	}
+	if !strings.Contains(m.View(), "scrolled up") {
+		t.Fatalf("scrolled-up indicator missing:\n%s", m.View())
+	}
+}
+
+func TestMouseWheelScrolling(t *testing.T) {
+	m := newTestModel(t, Options{})
+	m.height = 24
+	for i := 0; i < 60; i++ {
+		m.addInfo("history line " + strings.Repeat("x", 40))
+	}
+	m.View()
+	if !m.followTail {
+		t.Fatal("initial view should follow the tail")
+	}
+	m.Update(tea.MouseMsg{Action: tea.MouseActionPress, Button: tea.MouseButtonWheelUp})
+	if m.followTail {
+		t.Fatal("wheel up did not disable followTail")
+	}
+	if m.viewport.YOffset <= 0 {
+		t.Fatalf("wheel up did not scroll: offset=%d", m.viewport.YOffset)
+	}
+	m.Update(tea.MouseMsg{Action: tea.MouseActionPress, Button: tea.MouseButtonWheelDown})
+	if !m.followTail {
+		t.Fatal("wheel down to the bottom did not re-enable followTail")
+	}
+}
+
+func TestTextOnlyTokensPerSecondTracking(t *testing.T) {
+	m := newTestModel(t, Options{})
+	m.running = true
+	m.turnStart = time.Now().Add(-time.Second)
+	text := strings.Repeat("word ", 100)
+
+	m.Update(agentEventMsg{event: agent.Event{Type: agent.EventTextDelta, Text: text}})
+	textSpeed := m.liveSpeed
+	if textSpeed <= 0 {
+		t.Fatalf("text delta did not produce a live speed: %v", textSpeed)
+	}
+	runesAfterText := m.outputRunes
+
+	m.Update(agentEventMsg{event: agent.Event{Type: agent.EventReasoningDelta, Text: strings.Repeat("reasoning ", 500)}})
+	if m.liveSpeed != textSpeed {
+		t.Fatalf("reasoning delta changed live speed: got %v want %v", m.liveSpeed, textSpeed)
+	}
+	if m.outputRunes != runesAfterText {
+		t.Fatalf("reasoning delta counted output runes: got %d want %d", m.outputRunes, runesAfterText)
+	}
+
+	m.Update(agentEventMsg{event: agent.Event{Type: agent.EventToolStart, ToolName: "bash", ToolCallID: "c1"}})
+	if m.liveSpeed != textSpeed {
+		t.Fatalf("tool start changed live speed: got %v want %v", m.liveSpeed, textSpeed)
+	}
+	if m.outputRunes != 0 {
+		t.Fatalf("tool start did not freeze the text window: runes=%d", m.outputRunes)
+	}
+
+	m.Update(agentEventMsg{event: agent.Event{Type: agent.EventUsage, TokensPerSec: 77}})
+	if m.liveSpeed != 77 {
+		t.Fatalf("usage tok/s = %v, want 77", m.liveSpeed)
+	}
+	m.Update(agentEventMsg{event: agent.Event{Type: agent.EventTurnEnd, TokensPerSec: 0}})
+	if m.liveSpeed != 77 {
+		t.Fatalf("zero tok/s usage erased text speed: got %v want 77", m.liveSpeed)
 	}
 }

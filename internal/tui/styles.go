@@ -28,6 +28,7 @@ const (
 	colorSage    = "#86C79A" // quiet success / sage
 	colorAmber   = "#E0B870" // quiet warning / amber
 	colorCoral   = "#E07A88" // quiet error / rose
+	colorSlate   = "#7F889B" // muted reasoning rail
 	colorText    = "#E2E8F0" // primary text
 	colorMuted   = "#94A3B8" // secondary text
 	colorSubtle  = "#64748B" // dim text
@@ -68,6 +69,7 @@ type styles struct {
 	statusKey    lipgloss.Style
 	statusValue  lipgloss.Style
 	statusAccent lipgloss.Style
+	statusAlert  lipgloss.Style
 	prompt       lipgloss.Style
 	cursor       lipgloss.Style
 	placeholder  lipgloss.Style
@@ -97,7 +99,7 @@ func newStyles(plain bool) styles {
 	}
 	s.user = lipgloss.NewStyle().Foreground(lipgloss.Color(colorText))
 	s.assistant = lipgloss.NewStyle().Foreground(lipgloss.Color(colorText))
-	s.reasoning = lipgloss.NewStyle().Foreground(lipgloss.Color(colorSubtle)).Italic(true)
+	s.reasoning = lipgloss.NewStyle().Foreground(lipgloss.Color(colorSlate)).Italic(true)
 	s.tool = lipgloss.NewStyle().Foreground(lipgloss.Color(colorSubtle))
 	s.toolName = lipgloss.NewStyle().Foreground(lipgloss.Color(colorAmber))
 	s.error = lipgloss.NewStyle().Foreground(lipgloss.Color(colorCoral))
@@ -121,6 +123,7 @@ func newStyles(plain bool) styles {
 	s.statusKey = lipgloss.NewStyle().Background(lipgloss.Color(colorSurface)).Foreground(lipgloss.Color(colorSubtle))
 	s.statusValue = lipgloss.NewStyle().Background(lipgloss.Color(colorSurface)).Foreground(lipgloss.Color(colorText))
 	s.statusAccent = lipgloss.NewStyle().Background(lipgloss.Color(colorSurface)).Foreground(lipgloss.Color(colorAccent)).Bold(true)
+	s.statusAlert = lipgloss.NewStyle().Background(lipgloss.Color(colorSurface)).Foreground(lipgloss.Color(colorCoral)).Bold(true)
 	s.prompt = lipgloss.NewStyle().Foreground(lipgloss.Color(colorAccent)).Bold(true)
 	s.cursor = lipgloss.NewStyle().Reverse(true)
 	s.placeholder = lipgloss.NewStyle().Foreground(lipgloss.Color(colorSubtle))
@@ -172,7 +175,11 @@ func (s styles) statusSegments(parts ...string) string {
 		if i > 0 {
 			b.WriteString(s.paint(s.statusKey, sep))
 		}
-		b.WriteString(s.paint(s.statusValue, part))
+		style := s.statusValue
+		if part == yoloLabel {
+			style = s.statusAlert
+		}
+		b.WriteString(s.paint(style, part))
 	}
 	return b.String()
 }

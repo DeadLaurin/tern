@@ -68,6 +68,10 @@ func (m *Model) handleSlash(line string, attachments []provider.ContentPart) tea
 	case "plan":
 		return m.cmdPlan()
 
+	case "yolo":
+		m.toggleYolo()
+		return nil
+
 	case "compact":
 		return m.cmdCompact(args)
 
@@ -199,6 +203,7 @@ func (m *Model) helpText() string {
 		"/model [name]":            "open the model selector or switch directly",
 		"/stats":                   "usage and activity log across sessions",
 		"/plan":                    "toggle read-only plan mode",
+		"/yolo":                    "toggle dangerous allow-all mode (Ctrl+Y)",
 		"/compact [text]":          "summarize older context (optional instructions)",
 		"/cost":                    "show token usage and estimated cost",
 		"/context":                 "show context window usage",
@@ -233,7 +238,7 @@ func (m *Model) helpText() string {
 			fmt.Fprintf(&b, "  /%-26s %s\n", cmd.Name, desc)
 		}
 	}
-	b.WriteString("\nKeys: enter send · shift/alt+enter newline · ctrl+r history search · ctrl+t reasoning/tools · ctrl+g $EDITOR · tab complete · ctrl+c cancel/quit")
+	b.WriteString("\nKeys: enter send · shift/alt+enter newline · ctrl+r history search · ctrl+t thinking · ctrl+y yolo · pgup/pgdn scroll · ctrl+g $EDITOR · tab complete · ctrl+c cancel/quit")
 	return strings.TrimRight(b.String(), "\n")
 }
 
@@ -278,7 +283,21 @@ func (m *Model) cmdPlan() tea.Cmd {
 	} else {
 		mode = permission.ModePlan
 	}
-	m.opts.Config.PermissionMode = mode.String()
+	m.applyPermissionMode(mode)
+	if mode == permission.ModePlan {
+		m.addInfo("Plan mode enabled: writes and mutating commands are denied.")
+	} else {
+		m.addInfo("Plan mode disabled: permission mode is ask.")
+	}
+	return nil
+}
+
+// applyPermissionMode updates both the configured mode and the live evaluator
+// used by the running agent. Toggling modes never requires restarting a session.
+func (m *Model) applyPermissionMode(mode permission.Mode) {
+	if m.opts.Config != nil {
+		m.opts.Config.PermissionMode = mode.String()
+	}
 	if m.opts.Agent != nil {
 		if m.opts.Agent.Permissions == nil {
 			m.opts.Agent.Permissions = permission.New(permission.Policy{
@@ -291,14 +310,38 @@ func (m *Model) cmdPlan() tea.Cmd {
 			policy.WorkDir = m.opts.WorkDir
 			m.opts.Agent.Permissions = permission.New(policy)
 		}
-		m.opts.Agent.Config.PermissionMode = mode.String()
+		if m.opts.Agent.Config != nil {
+			m.opts.Agent.Config.PermissionMode = mode.String()
+		} else {
+			m.opts.Agent.Config = m.opts.Config
+		}
 	}
-	if mode == permission.ModePlan {
-		m.addInfo("Plan mode enabled: writes and mutating commands are denied.")
-	} else {
-		m.addInfo("Plan mode disabled: permission mode is ask.")
+	m.dirty = true
+}
+
+// toggleYolo flips dangerous allow-all mode and restores the previous mode when
+// it is switched off again.
+func (m *Model) toggleYolo() {
+	current := permission.ModeAsk
+	if m.opts.Agent != nil && m.opts.Agent.Permissions != nil {
+		current = m.opts.Agent.Permissions.Mode()
+	} else if m.opts.Config != nil && m.opts.Config.PermissionMode != "" {
+		if parsed, err := permission.ParseMode(m.opts.Config.PermissionMode); err == nil {
+			current = parsed
+		}
 	}
-	return nil
+	if current == permission.ModeYolo {
+		target := m.previousPermissionMode
+		if target == "" || target == permission.ModeYolo {
+			target = permission.ModeAsk
+		}
+		m.applyPermissionMode(target)
+		m.addInfo("YOLO mode disabled: permission mode is " + target.String() + ".")
+		return
+	}
+	m.previousPermissionMode = current
+	m.applyPermissionMode(permission.ModeYolo)
+	m.addInfo("YOLO mode enabled: every tool call is allowed without prompting.")
 }
 
 func (m *Model) cmdCompact(instructions string) tea.Cmd {

@@ -108,6 +108,7 @@ func New(opts Options) *Model {
 		agents:     make(map[string]*agentBlock),
 		agentLines: make(map[string]*strings.Builder),
 		statusMsg:  "Ready",
+		followTail: true,
 		ctxWindow:  defaultContextWindow(opts),
 	}
 	m.viewport.MouseWheelEnabled = true

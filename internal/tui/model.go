@@ -17,6 +17,7 @@ import (
 
 	"github.com/tern-agent/tern/internal/agent"
 	terncontext "github.com/tern-agent/tern/internal/context"
+	"github.com/tern-agent/tern/internal/permission"
 	"github.com/tern-agent/tern/internal/provider"
 	"github.com/tern-agent/tern/internal/subagent"
 	"github.com/tern-agent/tern/internal/tools"
@@ -29,6 +30,16 @@ const (
 	quitTimeout   = 3 * time.Second
 	maxEditorRows = 8
 	maxDiffRows   = 28
+	yoloLabel     = "YOLO !"
+)
+
+// thinkingMode controls how reasoning entries are rendered.
+type thinkingMode int
+
+const (
+	thinkingCollapsed thinkingMode = iota
+	thinkingExpanded
+	thinkingHidden
 )
 
 type entryKind int
@@ -108,8 +119,12 @@ type Model struct {
 	agentsPanel bool
 	panelIndex  int
 
-	showReasoning  bool
+	thinking       thinkingMode
 	showToolDetail bool
+
+	// previousPermissionMode is remembered when YOLO is enabled so toggling it
+	// off restores the mode the user was in before.
+	previousPermissionMode permission.Mode
 
 	running   bool
 	turnCtx   context.Context
@@ -239,11 +254,21 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case tea.MouseMsg:
+		switch {
+		case msg.Action == tea.MouseActionPress && msg.Button == tea.MouseButtonWheelUp,
+			msg.Type == tea.MouseWheelUp:
+			m.viewport.ScrollUp(3)
+			m.followTail = m.viewport.AtBottom()
+			return m, nil
+		case msg.Action == tea.MouseActionPress && msg.Button == tea.MouseButtonWheelDown,
+			msg.Type == tea.MouseWheelDown:
+			m.viewport.ScrollDown(3)
+			m.followTail = m.viewport.AtBottom()
+			return m, nil
+		}
 		var cmd tea.Cmd
 		m.viewport, cmd = m.viewport.Update(msg)
-		if m.viewport.AtBottom() {
-			m.followTail = true
-		}
+		m.followTail = m.viewport.AtBottom()
 		return m, cmd
 
 	case tea.KeyMsg:
@@ -278,14 +303,25 @@ func (m *Model) handleKey(msg tea.KeyMsg) tea.Cmd {
 		return m.handleCtrlC()
 	}
 	if msg.Type == tea.KeyCtrlT {
-		m.showReasoning = !m.showReasoning
-		m.showToolDetail = m.showReasoning
-		if m.showReasoning {
-			m.statusMsg = "Reasoning and tool details expanded"
-		} else {
-			m.statusMsg = "Reasoning and tool details collapsed"
+		switch m.thinking {
+		case thinkingCollapsed:
+			m.thinking = thinkingExpanded
+			m.showToolDetail = true
+			m.statusMsg = "Thinking expanded"
+		case thinkingExpanded:
+			m.thinking = thinkingHidden
+			m.showToolDetail = false
+			m.statusMsg = "Thinking hidden"
+		default:
+			m.thinking = thinkingCollapsed
+			m.showToolDetail = false
+			m.statusMsg = "Thinking collapsed"
 		}
 		m.dirty = true
+		return nil
+	}
+	if msg.Type == tea.KeyCtrlY {
+		m.toggleYolo()
 		return nil
 	}
 	if msg.Type == tea.KeyCtrlO {
@@ -306,17 +342,50 @@ func (m *Model) handleKey(msg tea.KeyMsg) tea.Cmd {
 	}
 
 	switch msg.Type {
-	case tea.KeyPgUp, tea.KeyPgDown, tea.KeyHome, tea.KeyEnd:
-		var cmd tea.Cmd
-		m.viewport, cmd = m.viewport.Update(msg)
+	case tea.KeyPgUp:
+		m.viewport.PageUp()
 		m.followTail = m.viewport.AtBottom()
-		return cmd
+		return nil
+	case tea.KeyPgDown:
+		m.viewport.PageDown()
+		m.followTail = m.viewport.AtBottom()
+		return nil
+	case tea.KeyCtrlUp, tea.KeyCtrlDown:
+		if msg.Type == tea.KeyCtrlUp {
+			m.viewport.ScrollUp(3)
+		} else {
+			m.viewport.ScrollDown(3)
+		}
+		m.followTail = m.viewport.AtBottom()
+		return nil
+	case tea.KeyHome:
+		if m.ed.IsEmpty() {
+			m.viewport.GotoTop()
+			m.followTail = m.viewport.AtBottom()
+			return nil
+		}
+	case tea.KeyEnd:
+		if m.ed.IsEmpty() {
+			m.viewport.GotoBottom()
+			m.followTail = true
+			return nil
+		}
 	case tea.KeyUp:
+		if msg.Alt {
+			m.viewport.ScrollUp(3)
+			m.followTail = m.viewport.AtBottom()
+			return nil
+		}
 		if m.agentsExpanded() && m.ed.IsEmpty() {
 			m.cycleAgentFocus(-1)
 			return nil
 		}
 	case tea.KeyDown:
+		if msg.Alt {
+			m.viewport.ScrollDown(3)
+			m.followTail = m.viewport.AtBottom()
+			return nil
+		}
 		if m.agentsExpanded() && m.ed.IsEmpty() {
 			m.cycleAgentFocus(1)
 			return nil
@@ -485,6 +554,7 @@ func (m *Model) startTurn(text string, attachments []provider.ContentPart) tea.C
 	m.outputRunes = 0
 	m.speedStart = time.Time{}
 	m.liveSpeed = 0
+	m.lastSpeed = 0
 	m.turnAutoApprove = false
 	m.statusMsg = "Thinking…"
 	m.ctxTokens += len(text) / 4
@@ -555,7 +625,6 @@ func (m *Model) handleAgentEvent(ev agent.Event) {
 	case agent.EventReasoningDelta:
 		m.pendingReasoning += ev.Text
 		m.ctxTokens += len(ev.Text) / 4
-		m.noteOutputStream(ev.Text)
 
 	case agent.EventTextDelta:
 		m.pendingText += ev.Text
@@ -564,6 +633,7 @@ func (m *Model) handleAgentEvent(ev agent.Event) {
 
 	case agent.EventToolStart:
 		m.flushPending()
+		m.freezeTextSpeed()
 		m.curAssistant = nil
 		m.curReasoning = nil
 		m.usingTools = true
@@ -788,7 +858,6 @@ func (m *Model) addInfo(text string) {
 	}
 	m.flushPending()
 	m.entries = append(m.entries, &transcriptEntry{kind: entryInfo, text: text})
-	m.followTail = true
 	m.dirty = true
 }
 
@@ -799,7 +868,6 @@ func (m *Model) addError(text string) {
 	}
 	m.flushPending()
 	m.entries = append(m.entries, &transcriptEntry{kind: entryError, text: text})
-	m.followTail = true
 	m.dirty = true
 }
 
@@ -817,79 +885,131 @@ func (m *Model) View() string {
 	m.flushPending()
 	m.rebuildContent()
 
-	layoutWidth := m.mainWidth()
-	editorView := m.ed.View(layoutWidth, m.st)
+	// Blocking prompts are true modal overlays: a card in the middle of the
+	// terminal, never a transcript replacement that drifts with layout changes.
+	if m.pendingApproval != nil {
+		return m.finishView(lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, m.approvalView()))
+	}
+	if m.pendingAsk != nil {
+		return m.finishView(lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, m.askView()))
+	}
+
+	colW := m.contentWidth()
+	editorView := m.editorBoxView()
 	todoView := m.todoView()
 	agentView := m.agentsView()
-	statusView := m.statusView()
 
 	mainView := ""
 	switch {
-	case m.pendingApproval != nil:
-		mainView = m.approvalView()
-	case m.pendingAsk != nil:
-		mainView = m.askView()
 	case m.agentsPanel:
 		mainView = m.agentsPanelView()
 	case m.activeModal != modalNone:
 		mainView = m.modalView()
-	default:
-		mainView = ""
+	}
+	if mainView != "" {
+		return m.finishView(strings.Join(append([]string{m.centerBlock(mainView)}, m.layoutBlock(editorView), m.layoutBlock(m.statusView())), "\n"))
 	}
 
 	bottom := make([]string, 0, 5)
 	if strings.TrimSpace(m.statusMsg) != "" {
-		bottom = append(bottom, m.centerBlock(m.st.paint(m.st.dim, m.statusMsg)))
+		bottom = append(bottom, m.layoutBlock(m.st.paint(m.st.dim, m.statusMsg)))
 	}
 	if todoView != "" {
-		bottom = append(bottom, m.centerBlock(todoView))
+		bottom = append(bottom, m.layoutBlock(todoView))
 	}
 	if agentView != "" {
-		bottom = append(bottom, m.centerBlock(agentView))
+		bottom = append(bottom, m.layoutBlock(agentView))
 	}
-	bottom = append(bottom, m.centerBlock(editorView))
-	bottom = append(bottom, statusView)
+	bottom = append(bottom, m.layoutBlock(editorView))
 
 	used := 0
 	for _, part := range bottom {
 		used += lineCount(part)
 	}
-	height := m.height - used
+	// The status line is a single row underneath the editor.
+	height := m.height - used - 1
 	if height < 1 {
 		height = 1
 	}
-	m.viewport.Width = layoutWidth
+	m.viewport.Width = colW
 	m.viewport.Height = height
-	if mainView != "" {
-		// Modals replace the transcript area and are centered horizontally.
-		return m.finishView(strings.Join(append([]string{m.centerBlock(mainView)}, bottom...), "\n"))
-	}
 	if m.followTail {
 		m.viewport.GotoBottom()
 	}
-	mainView = m.centerBlock(m.viewport.View())
-	return m.finishView(strings.Join(append([]string{mainView}, bottom...), "\n"))
+	transcript := m.layoutBlock(m.viewport.View())
+	bottom = append(bottom, m.layoutBlock(m.statusView()))
+	return m.finishView(strings.Join(append([]string{transcript}, bottom...), "\n"))
 }
 
-// mainWidth is the width of the centered workspace column. On wide terminals
-// the transcript and editor stay in a comfortable measure instead of stretching
-// every line across the whole screen.
-func (m *Model) mainWidth() int {
-	if m.width > 100 {
-		width := m.width - 4
-		if width > 98 {
-			width = 98
-		}
-		return width
+// contentWidth is the single fixed measure used by the transcript, editor and
+// status bar. Computing it once (and never varying it per component) is what
+// keeps the column perfectly still while typing.
+func (m *Model) contentWidth() int {
+	if m.width <= 80 {
+		return maxInt(20, m.width)
 	}
-	return maxInt(20, m.width)
+	width := m.width - 4
+	if width > 96 {
+		width = 96
+	}
+	return maxInt(20, width)
 }
+
+// contentLeftPad is the fixed left gutter of the centered column.
+func (m *Model) contentLeftPad() int {
+	pad := (m.width - m.contentWidth()) / 2
+	if pad < 0 {
+		pad = 0
+	}
+	return pad
+}
+
+// layoutBlock places every line of a block at the same fixed left gutter.
+// Unlike centering each line independently, this keeps short and long lines
+// (and the moving cursor) locked to one column.
+func (m *Model) layoutBlock(block string) string {
+	if block == "" {
+		return ""
+	}
+	pad := m.contentLeftPad()
+	if pad == 0 {
+		return block
+	}
+	prefix := strings.Repeat(" ", pad)
+	lines := strings.Split(block, "\n")
+	for i := range lines {
+		lines[i] = prefix + lines[i]
+	}
+	return strings.Join(lines, "\n")
+}
+
+// editorBoxView renders the input inside a subtle full-column rounded box.
+// The prompt is left-aligned inside the box so typing never moves the frame.
+func (m *Model) editorBoxView() string {
+	colW := m.contentWidth()
+	if m.st.plain {
+		return m.ed.View(colW, m.st)
+	}
+	inner := maxInt(8, colW-4)
+	body := m.ed.View(inner, m.st)
+	box := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(lipgloss.Color(colorBorder)).
+		Background(lipgloss.Color(colorSurface)).
+		Padding(0, 1).
+		Width(maxInt(8, colW-2)).
+		Render(body)
+	return box
+}
+
+// mainWidth is retained as an alias for the workspace measure.
+func (m *Model) mainWidth() int { return m.contentWidth() }
 
 // centerBlock horizontally centers a rendered block inside the terminal. It is
-// a no-op on narrow terminals and in plain mode, where padding is unnecessary
-// and keeping output compact matters more.
+// used only for modal cards; the transcript/editor/status column uses the
+// fixed layoutBlock gutter instead.
 func (m *Model) centerBlock(block string) string {
-	if block == "" || m.st.plain || m.width <= 100 {
+	if block == "" || m.st.plain || m.width <= 80 {
 		return block
 	}
 	return lipgloss.PlaceHorizontal(m.width, lipgloss.Center, block)
@@ -999,16 +1119,21 @@ func (m *Model) renderEntry(entry *transcriptEntry) string {
 		return RenderMarkdown(entry.text, width, m.st.plain)
 
 	case entryReasoning:
-		label := "✻ Reasoning"
-		if m.st.plain {
-			label = "* Reasoning"
+		if m.thinking == thinkingHidden {
+			return ""
 		}
-		if !m.showReasoning {
-			n := len([]rune(entry.text))
-			return m.st.paint(m.st.dim, fmt.Sprintf("%s (%d chars, Ctrl+T to expand)", label, n))
+		n := len([]rune(entry.text))
+		if m.thinking == thinkingCollapsed {
+			label := fmt.Sprintf("▸ Thought · %d chars  (^T expand)", n)
+			return m.st.paint(m.st.reasoning, label)
 		}
-		body := RenderMarkdown(entry.text, width-2, m.st.plain)
-		return m.st.paint(m.st.reasoning, label) + "\n" + m.st.paint(m.st.dim, body)
+		header := m.st.paint(m.st.reasoning, "▾ Thought")
+		body := RenderMarkdown(entry.text, maxInt(20, width-2), m.st.plain)
+		lines := strings.Split(body, "\n")
+		for i := range lines {
+			lines[i] = m.st.paint(m.st.reasoning, "│ ") + m.st.paint(m.st.reasoning, lines[i])
+		}
+		return header + "\n" + strings.Join(lines, "\n")
 
 	case entryTool:
 		marker := "⚙ "
@@ -1125,7 +1250,11 @@ func (m *Model) statusView() string {
 	} else if m.opts.Config != nil && m.opts.Config.PermissionMode != "" {
 		mode = m.opts.Config.PermissionMode
 	}
-	parts := []string{modelLabel, mode}
+	modeLabel := mode
+	if mode == string(permission.ModeYolo) {
+		modeLabel = yoloLabel
+	}
+	parts := []string{modelLabel, modeLabel}
 	if speed := m.speed(); speed > 0 {
 		parts = append(parts, formatTokensPerSec(speed))
 	}
@@ -1145,15 +1274,22 @@ func (m *Model) statusView() string {
 	if branch := strings.TrimSpace(m.opts.GitBranch); branch != "" {
 		parts = append(parts, branch)
 	}
+	if mode != string(permission.ModeYolo) {
+		parts = append(parts, "^Y yolo")
+	}
+	if !m.followTail && !m.viewport.AtBottom() {
+		parts = append(parts, "↓ scrolled up (End)")
+	}
 	text := m.st.statusSegments(parts...)
+	width := m.contentWidth()
 	if m.st.plain {
 		return text
 	}
-	pad := m.width - displayWidth(text)
+	pad := width - displayWidth(text)
 	if pad > 0 {
 		text += strings.Repeat(" ", pad)
 	}
-	return m.st.statusBar.Render(text)
+	return m.st.statusBar.Width(width).Render(text)
 }
 
 // speed returns the most useful throughput number for display: the live
@@ -1181,8 +1317,9 @@ func formatTokensPerSec(v float64) string {
 	return fmt.Sprintf("%.1f tok/s", v)
 }
 
-// noteOutputStream estimates throughput from streamed deltas. The estimate is
-// replaced by the provider's exact value when usage/turn-end events arrive.
+// noteOutputStream estimates text-only throughput from streamed deltas. The
+// estimate is replaced by the provider's exact value when usage/turn-end
+// events arrive.
 func (m *Model) noteOutputStream(text string) {
 	n := len([]rune(text))
 	if n == 0 {
@@ -1197,6 +1334,14 @@ func (m *Model) noteOutputStream(text string) {
 		elapsed = 0.2
 	}
 	m.liveSpeed = float64(m.outputRunes/4) / elapsed
+}
+
+// freezeTextSpeed ends the current text-speed window when a tool starts, so
+// tool execution time is never included in tok/s. The last text-only value is
+// kept on screen until new text starts streaming.
+func (m *Model) freezeTextSpeed() {
+	m.outputRunes = 0
+	m.speedStart = time.Time{}
 }
 
 func (m *Model) runningStatus() string {
