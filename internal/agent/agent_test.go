@@ -818,3 +818,219 @@ func TestWebAdapters(t *testing.T) {
 		t.Fatal("mcp execute with nil manager should fail")
 	}
 }
+
+// ---------------------------------------------------------------------------
+// Generation speed and runtime switching
+// ---------------------------------------------------------------------------
+
+func TestStreamMetricsReportedOnUsageAndTurnEnd(t *testing.T) {
+	workDir := t.TempDir()
+	p := provider.NewMockProvider()
+	p.QueueSSE(sseFixture(t, "speed test", nil, &provider.Usage{
+		PromptTokens: 12, CompletionTokens: 8, TotalTokens: 20,
+	}))
+
+	var events []Event
+	a := New(Options{
+		Config:      testConfig(),
+		Provider:    p,
+		Registry:    newRegistry(t),
+		Permissions: yoloPermissions(workDir),
+		WorkDir:     workDir,
+		OnEvent:     func(ev Event) { events = append(events, ev) },
+	})
+
+	res, err := a.RunTurn(context.Background(), "measure this", nil)
+	if err != nil {
+		t.Fatalf("RunTurn: %v", err)
+	}
+	if res.DurationMs < 0 {
+		t.Fatalf("turn duration_ms = %d, want non-negative", res.DurationMs)
+	}
+	if res.TokensPerSec < 0 {
+		t.Fatalf("turn tokens_per_sec = %v, want non-negative", res.TokensPerSec)
+	}
+	if res.TokensPerSec == 0 {
+		t.Fatalf("turn tokens_per_sec = 0, want positive for %d completion tokens", res.Usage.CompletionTokens)
+	}
+
+	var usageEv, endEv *Event
+	for i := range events {
+		switch events[i].Type {
+		case EventUsage:
+			usageEv = &events[i]
+		case EventTurnEnd:
+			endEv = &events[i]
+		}
+	}
+	if usageEv == nil {
+		t.Fatalf("missing usage event: %+v", events)
+	}
+	if endEv == nil {
+		t.Fatalf("missing turn_end event: %+v", events)
+	}
+	for name, ev := range map[string]*Event{"usage": usageEv, "turn_end": endEv} {
+		if ev.DurationMs < 0 {
+			t.Fatalf("%s duration_ms = %d, want non-negative", name, ev.DurationMs)
+		}
+		if ev.TokensPerSec < 0 {
+			t.Fatalf("%s tokens_per_sec = %v, want non-negative", name, ev.TokensPerSec)
+		}
+		if ev.TokensPerSec == 0 {
+			t.Fatalf("%s tokens_per_sec = 0, want positive", name)
+		}
+	}
+
+	// The JSON envelope must carry the new fields.
+	raw, err := json.Marshal(*endEv)
+	if err != nil {
+		t.Fatalf("marshal turn_end: %v", err)
+	}
+	for _, key := range []string{`"duration_ms"`, `"tokens_per_sec"`} {
+		if !strings.Contains(string(raw), key) {
+			t.Fatalf("turn_end JSON missing %s: %s", key, raw)
+		}
+	}
+}
+
+func TestSetModelAndReasoningEffort(t *testing.T) {
+	workDir := t.TempDir()
+	cfg := testConfig()
+	cfg.ReasoningEffort = ""
+	a := New(Options{
+		Config:      cfg,
+		Provider:    provider.NewMockProvider(),
+		Registry:    newRegistry(t),
+		Permissions: yoloPermissions(workDir),
+		WorkDir:     workDir,
+	})
+
+	a.SetModel("deepseek-v4-pro")
+	if a.Config.Model != "deepseek-v4-pro" {
+		t.Fatalf("model = %q, want deepseek-v4-pro", a.Config.Model)
+	}
+	if got := a.ReasoningEffort(); got != "" {
+		t.Fatalf("reasoning effort = %q, want empty default", got)
+	}
+	a.SetReasoningEffort("high")
+	if got := a.ReasoningEffort(); got != "high" {
+		t.Fatalf("reasoning effort = %q, want high", got)
+	}
+	req := a.buildRequest()
+	if req.ReasoningEffort != "high" {
+		t.Fatalf("request reasoning effort = %q, want high", req.ReasoningEffort)
+	}
+	a.SetReasoningEffort("")
+	if got := a.ReasoningEffort(); got != "" {
+		t.Fatalf("reasoning effort after clear = %q, want empty", got)
+	}
+}
+
+func TestSwitchSessionPreservesHistoryUsageAndFirstTurnContext(t *testing.T) {
+	workDir := t.TempDir()
+	writeFile(t, workDir, "AGENTS.md", "Project convention: keep tests focused.")
+
+	store, err := session.NewStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("session store: %v", err)
+	}
+	populated, err := store.Create(session.SessionMeta{Name: "populated", Model: "deepseek-flash", WorkDir: workDir})
+	if err != nil {
+		t.Fatalf("create populated session: %v", err)
+	}
+	fresh, err := store.Create(session.SessionMeta{Name: "fresh", Model: "deepseek-flash", WorkDir: workDir})
+	if err != nil {
+		t.Fatalf("create fresh session: %v", err)
+	}
+
+	p := provider.NewMockProvider()
+	p.QueueSSE(sseFixture(t, "first answer", nil, &provider.Usage{PromptTokens: 10, CompletionTokens: 2, TotalTokens: 12}))
+	p.QueueSSE(sseFixture(t, "fresh answer", nil, &provider.Usage{PromptTokens: 20, CompletionTokens: 3, TotalTokens: 23}))
+	p.QueueSSE(sseFixture(t, "resumed answer", nil, &provider.Usage{PromptTokens: 30, CompletionTokens: 4, TotalTokens: 34}))
+
+	a := New(Options{
+		Config:      testConfig(),
+		Provider:    p,
+		Registry:    newRegistry(t),
+		Permissions: yoloPermissions(workDir),
+		Session:     populated,
+		WorkDir:     workDir,
+	})
+	if _, err := a.RunTurn(context.Background(), "hello populated", nil); err != nil {
+		t.Fatalf("populated turn: %v", err)
+	}
+	populatedHistory := a.History()
+	populatedUsage, populatedCost := a.TotalUsage()
+	if len(populatedHistory) != 2 {
+		t.Fatalf("populated history = %d messages, want 2", len(populatedHistory))
+	}
+	if populatedUsage.CompletionTokens != 2 || populatedUsage.PromptTokens != 10 {
+		t.Fatalf("populated usage = %+v", populatedUsage)
+	}
+
+	a.SwitchSession(fresh)
+	if a.Session != fresh {
+		t.Fatal("active session was not switched")
+	}
+	if got := a.History(); len(got) != 0 {
+		t.Fatalf("fresh history = %d messages, want 0: %+v", len(got), got)
+	}
+	if usage, cost := a.TotalUsage(); usage != (provider.Usage{}) || cost != 0 {
+		t.Fatalf("fresh usage = %+v cost %v, want zero", usage, cost)
+	}
+	if a.firstUserSent {
+		t.Fatal("fresh session should not mark first user message as sent")
+	}
+
+	if _, err := a.RunTurn(context.Background(), "hello fresh", nil); err != nil {
+		t.Fatalf("fresh turn: %v", err)
+	}
+	requests := p.RequestSnapshot()
+	if len(requests) != 2 {
+		t.Fatalf("provider requests = %d, want 2", len(requests))
+	}
+	freshUser := requests[1].Messages[len(requests[1].Messages)-1]
+	if !strings.Contains(freshUser.Content, "<environment>") {
+		t.Fatalf("fresh session first user message did not include dynamic context: %q", freshUser.Content)
+	}
+	if !strings.Contains(freshUser.Content, "keep tests focused") {
+		t.Fatalf("fresh session first user message did not include project instructions: %q", freshUser.Content)
+	}
+	if got := a.History(); len(got) != 2 {
+		t.Fatalf("fresh history after turn = %d messages, want 2", len(got))
+	}
+	if usage, _ := a.TotalUsage(); usage.CompletionTokens != 3 {
+		t.Fatalf("fresh usage after turn = %+v, want only fresh session usage", usage)
+	}
+
+	// Switch back: the populated transcript and accounting return intact.
+	a.SwitchSession(populated)
+	if got := a.History(); !reflect.DeepEqual(got, populatedHistory) {
+		t.Fatalf("restored history = %+v, want %+v", got, populatedHistory)
+	}
+	gotUsage, gotCost := a.TotalUsage()
+	if gotUsage != populatedUsage || gotCost != populatedCost {
+		t.Fatalf("restored usage = %+v cost %v, want %+v cost %v", gotUsage, gotCost, populatedUsage, populatedCost)
+	}
+	if !a.firstUserSent {
+		t.Fatal("populated session should mark first user message as sent")
+	}
+
+	if _, err := a.RunTurn(context.Background(), "hello again", nil); err != nil {
+		t.Fatalf("resumed turn: %v", err)
+	}
+	requests = p.RequestSnapshot()
+	if len(requests) != 3 {
+		t.Fatalf("provider requests = %d, want 3", len(requests))
+	}
+	resumedUser := requests[2].Messages[len(requests[2].Messages)-1]
+	if strings.Contains(resumedUser.Content, "<environment>") {
+		t.Fatalf("resumed session re-prepended dynamic context: %q", resumedUser.Content)
+	}
+	if resumedUser.Content != "hello again" {
+		t.Fatalf("resumed user message = %q, want plain input", resumedUser.Content)
+	}
+	if usage, _ := a.TotalUsage(); usage.CompletionTokens != 2+4 {
+		t.Fatalf("resumed usage = %+v, want cumulative 6 completion tokens", usage)
+	}
+}

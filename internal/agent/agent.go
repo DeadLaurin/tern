@@ -71,6 +71,12 @@ type TurnResult struct {
 	CacheHitRate float64        `json:"cache_hit_rate"`
 	Compacted    bool           `json:"compacted,omitempty"`
 	StopReason   StopReason     `json:"stop_reason"`
+	DurationMs   int64          `json:"duration_ms,omitempty"`
+	TokensPerSec float64        `json:"tokens_per_sec,omitempty"`
+
+	// streamDuration accumulates provider stream time for this turn. It is
+	// unexported because DurationMs is the serialized representation.
+	streamDuration time.Duration
 }
 
 // Options configures a new Agent. All fields are optional except Provider.
@@ -113,6 +119,10 @@ type Agent struct {
 	initialized bool
 	history     []provider.Message
 	turn        int
+	// firstUserSent records whether initial dynamic context (environment,
+	// project instructions) has already been prepended to a user message in
+	// the active session.
+	firstUserSent bool
 
 	totalUsage provider.Usage
 	totalCost  float64
@@ -213,6 +223,7 @@ func (a *Agent) ensureInit() {
 		a.totalUsage, a.totalCost = a.Session.Usage()
 	}
 	a.turn = countUserMessages(a.history)
+	a.firstUserSent = a.turn > 0
 }
 
 // TotalUsage returns cumulative token usage and estimated cost for the
@@ -230,6 +241,57 @@ func (a *Agent) History() []provider.Message {
 	defer a.runMu.Unlock()
 	a.ensureInit()
 	return append([]provider.Message(nil), a.history...)
+}
+
+// SetModel switches the model used for subsequent provider requests.
+func (a *Agent) SetModel(model string) {
+	a.runMu.Lock()
+	defer a.runMu.Unlock()
+	a.ensureInit()
+	a.Config.Model = model
+}
+
+// SetReasoningEffort updates the reasoning effort sent with provider requests.
+// An empty effort clears the setting.
+func (a *Agent) SetReasoningEffort(effort string) {
+	a.runMu.Lock()
+	defer a.runMu.Unlock()
+	a.ensureInit()
+	a.Config.ReasoningEffort = effort
+}
+
+// ReasoningEffort returns the configured reasoning effort.
+func (a *Agent) ReasoningEffort() string {
+	a.runMu.Lock()
+	defer a.runMu.Unlock()
+	a.ensureInit()
+	return a.Config.ReasoningEffort
+}
+
+// SwitchSession makes sess the active session. It replaces the in-memory
+// history with the session transcript, restores cumulative usage and cost, and
+// resets first-turn detection: an existing session keeps its history without
+// re-prepending dynamic context, while a fresh empty session gets the initial
+// context again.
+func (a *Agent) SwitchSession(sess *session.Session) {
+	a.runMu.Lock()
+	defer a.runMu.Unlock()
+	a.ensureInit()
+
+	a.Session = sess
+	if sess == nil {
+		a.history = nil
+		a.totalUsage = provider.Usage{}
+		a.totalCost = 0
+		a.turn = 0
+		a.firstUserSent = false
+		return
+	}
+
+	a.history = sess.ReplayMessages()
+	a.totalUsage, a.totalCost = sess.TotalUsage()
+	a.turn = countUserMessages(a.history)
+	a.firstUserSent = a.turn > 0
 }
 
 // RunTurn runs one full user turn: append the user message, stream model
@@ -261,13 +323,14 @@ func (a *Agent) RunTurn(ctx context.Context, userInput string, attachments []pro
 		}
 	}
 
-	firstTurn := countUserMessages(a.history) == 0
+	firstTurn := !a.firstUserSent
 	a.turn++
 	turn := a.turn
 	startUsage := a.totalUsage
 	startCost := a.totalCost
 
 	text := composeUserMessage(a, userInput, attachments, firstTurn)
+	a.firstUserSent = true
 	userMsg := provider.Message{Role: provider.RoleUser, Content: text}
 	if len(attachments) > 0 {
 		parts := make([]provider.ContentPart, 0, len(attachments)+1)
@@ -313,6 +376,7 @@ func (a *Agent) RunTurn(ctx context.Context, userInput string, attachments []pro
 		if sr.compacted {
 			compacted = true
 		}
+		res.streamDuration += sr.Duration
 		if sr.Usage.TotalTokens > 0 || sr.Usage.PromptTokens > 0 || sr.Usage.CompletionTokens > 0 {
 			a.lastPromptTokens = sr.Usage.PromptTokens
 		}
@@ -368,6 +432,8 @@ func (a *Agent) finishTurn(res *TurnResult, turn int, startUsage provider.Usage,
 	res.TotalUsage = a.totalUsage
 	res.TotalCostUSD = a.totalCost
 	res.CacheHitRate = cacheHitRate(a.totalUsage)
+	res.DurationMs = res.streamDuration.Milliseconds()
+	res.TokensPerSec = tokensPerSec(res.Usage.CompletionTokens, res.streamDuration)
 
 	if err != nil {
 		a.emit(Event{Type: EventError, Turn: turn, Message: err.Error(), Reason: string(reason)})
@@ -381,6 +447,8 @@ func (a *Agent) finishTurn(res *TurnResult, turn int, startUsage provider.Usage,
 		CostUSD:      res.CostUSD,
 		TotalCostUSD: res.TotalCostUSD,
 		CacheHitRate: res.CacheHitRate,
+		DurationMs:   res.DurationMs,
+		TokensPerSec: res.TokensPerSec,
 		Message:      res.Text,
 	})
 	if err != nil {
@@ -391,11 +459,21 @@ func (a *Agent) finishTurn(res *TurnResult, turn int, startUsage provider.Usage,
 
 // streamResult is one assistant response accumulated from the stream.
 type streamResult struct {
-	Text      string
-	Reasoning string
-	ToolCalls []provider.ToolCall
-	Usage     provider.Usage
-	compacted bool
+	Text         string
+	Reasoning    string
+	ToolCalls    []provider.ToolCall
+	Usage        provider.Usage
+	Duration     time.Duration
+	TokensPerSec float64
+	compacted    bool
+}
+
+// tokensPerSec computes generation speed, guarding against zero values.
+func tokensPerSec(completionTokens int, elapsed time.Duration) float64 {
+	if elapsed <= 0 || completionTokens <= 0 {
+		return 0
+	}
+	return float64(completionTokens) / elapsed.Seconds()
 }
 
 // streamWithRetry streams one response. On provider.ErrContextTooLong it
@@ -432,11 +510,16 @@ func (a *Agent) streamWithRetry(ctx context.Context, req provider.ChatRequest, t
 
 // streamOnce performs one provider stream and emits live deltas and usage.
 func (a *Agent) streamOnce(ctx context.Context, req provider.ChatRequest, turn, step int) (*streamResult, error) {
+	start := time.Now()
 	ch, err := a.Provider.Stream(ctx, req)
 	if err != nil {
 		return nil, err
 	}
 	sr := &streamResult{}
+	defer func() {
+		sr.Duration = time.Since(start)
+		sr.TokensPerSec = tokensPerSec(sr.Usage.CompletionTokens, sr.Duration)
+	}()
 	var calls []*provider.ToolCall
 	for ev := range ch {
 		switch ev.Type {
@@ -461,7 +544,7 @@ func (a *Agent) streamOnce(ctx context.Context, req provider.ChatRequest, turn, 
 		case provider.EventUsage:
 			if ev.Usage != nil {
 				sr.Usage = *ev.Usage
-				a.recordUsage(req, *ev.Usage, turn, step)
+				a.recordUsage(req, *ev.Usage, turn, step, time.Since(start))
 			}
 		case provider.EventError:
 			if ev.Err != nil {
@@ -549,7 +632,7 @@ func (a *Agent) cacheDebug(req provider.ChatRequest, step int) {
 }
 
 // recordUsage accumulates accounting and emits a live usage event.
-func (a *Agent) recordUsage(req provider.ChatRequest, u provider.Usage, turn, step int) {
+func (a *Agent) recordUsage(req provider.ChatRequest, u provider.Usage, turn, step int, elapsed time.Duration) {
 	cost := a.costForUsage(u, time.Now())
 	a.addUsage(u, cost)
 	a.lastPromptTokens = u.PromptTokens
@@ -567,6 +650,8 @@ func (a *Agent) recordUsage(req provider.ChatRequest, u provider.Usage, turn, st
 		CostUSD:      cost,
 		TotalCostUSD: a.totalCost,
 		CacheHitRate: cacheHitRate(a.totalUsage),
+		DurationMs:   elapsed.Milliseconds(),
+		TokensPerSec: tokensPerSec(u.CompletionTokens, elapsed),
 	})
 }
 
@@ -906,6 +991,14 @@ func (a *Agent) sessionID() string {
 }
 
 func (a *Agent) emit(ev Event) {
+	// DurationMS predates DurationMs; keep both views consistent for callers
+	// that still read the old field.
+	if ev.DurationMs == 0 {
+		ev.DurationMs = ev.DurationMS
+	}
+	if ev.DurationMs != 0 {
+		ev.DurationMS = ev.DurationMs
+	}
 	if a.OnEvent == nil {
 		return
 	}
