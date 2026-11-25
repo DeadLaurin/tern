@@ -55,27 +55,14 @@ jobs:
           go-version-file: go.mod
           cache: true
 
-      - name: Detect main package
-        id: main
-        shell: bash
-        run: |
-          pkg="$(go list -f '{{if eq .Name "main"}}{{.ImportPath}}{{end}}' ./... | sed '/^$/d' | head -n 1)"
-          if [ -z "$pkg" ]; then
-            echo "::error::no main package found to build"
-            exit 1
-          fi
-          echo "package=$pkg" >> "$GITHUB_OUTPUT"
-
       - name: Build all release targets
         shell: bash
-        env:
-          PACKAGE: ${{ steps.main.outputs.package }}
         run: |
           set -euo pipefail
           out_dir="$(mktemp -d)"
           trap 'rm -rf "$out_dir"' EXIT
 
-          for target in linux/amd64 linux/arm64 windows/amd64 windows/arm64 darwin/arm64; do
+          for target in linux/amd64 linux/arm64 windows/amd64 windows/arm64 darwin/amd64 darwin/arm64; do
             goos="${target%/*}"
             goarch="${target#*/}"
             binary="tern"
@@ -83,7 +70,7 @@ jobs:
               binary="tern.exe"
             fi
 
-            echo "Building ${PACKAGE} for ${goos}/${goarch}"
+            echo "Building ./cmd/tern for ${goos}/${goarch}"
             CGO_ENABLED=0 GOOS="$goos" GOARCH="$goarch" \
-              go build -trimpath -ldflags="-s -w" -o "${out_dir}/${binary}" "$PACKAGE"
+              go build -trimpath -ldflags="-s -w" -o "${out_dir}/${binary}" ./cmd/tern
           done

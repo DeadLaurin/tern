@@ -4,6 +4,12 @@ on:
   push:
     tags:
       - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release tag to publish (e.g. v0.1.0)'
+        required: true
+        type: string
 
 permissions:
   contents: write
@@ -24,30 +30,31 @@ jobs:
           go-version-file: go.mod
           cache: true
 
-      - name: Detect main package
-        id: main
+      - name: Resolve release tag
+        id: tag
         shell: bash
+        env:
+          INPUT_TAG: ${{ inputs.tag }}
+          REF_NAME: ${{ github.ref_name }}
         run: |
-          pkg="$(go list -f '{{if eq .Name "main"}}{{.ImportPath}}{{end}}' ./... | sed '/^$/d' | head -n 1)"
-          if [ -z "$pkg" ]; then
-            echo "::error::no main package found to build"
+          tag="${INPUT_TAG:-$REF_NAME}"
+          if [[ ! "$tag" =~ ^v[0-9] ]]; then
+            echo "::error::release tag must start with v followed by a version number (got: '${tag}')"
             exit 1
           fi
-          echo "package=$pkg" >> "$GITHUB_OUTPUT"
+          echo "tag=${tag}" >> "$GITHUB_OUTPUT"
+          echo "version=${tag#v}" >> "$GITHUB_OUTPUT"
+
+      - name: Run tests
+        run: go test -race ./...
 
       - name: Build binaries and packages
         shell: bash
         env:
-          PACKAGE: ${{ steps.main.outputs.package }}
-          REF_NAME: ${{ github.ref_name }}
+          TAG: ${{ steps.tag.outputs.tag }}
+          VERSION: ${{ steps.tag.outputs.version }}
         run: |
           set -euo pipefail
-
-          version="${REF_NAME#v}"
-          if [ -z "$version" ]; then
-            echo "::error::could not derive version from tag '${REF_NAME}'"
-            exit 1
-          fi
 
           dist="${GITHUB_WORKSPACE}/dist"
           rm -rf "$dist"
@@ -62,15 +69,15 @@ jobs:
             fi
 
             stage="$(mktemp -d)"
-            echo "Building ${PACKAGE} for ${goos}/${goarch}"
+            echo "Building ./cmd/tern ${TAG} for ${goos}/${goarch}"
             CGO_ENABLED=0 GOOS="$goos" GOARCH="$goarch" \
               go build \
                 -trimpath \
-                -ldflags="-s -w -X main.version=${REF_NAME}" \
+                -ldflags="-s -w -X main.version=${TAG}" \
                 -o "${stage}/${binary}" \
-                "$PACKAGE"
+                ./cmd/tern
 
-            name="tern_${version}_${goos}_${goarch}"
+            name="tern_${VERSION}_${goos}_${goarch}"
             if [ "$goos" = "windows" ]; then
               (cd "$stage" && zip -q -9 "${dist}/${name}.zip" "$binary")
             else
@@ -82,13 +89,13 @@ jobs:
 
           (cd "$dist" && sha256sum *.tar.gz *.zip > checksums.txt)
           echo "Release assets:"
-          ls -l "$dist"
+          ls -lh "$dist"
 
       - name: Publish GitHub release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ github.ref_name }}
-          name: ${{ github.ref_name }}
+          tag_name: ${{ steps.tag.outputs.tag }}
+          name: ${{ steps.tag.outputs.tag }}
           files: dist/*
           fail_on_unmatched_files: true
           generate_release_notes: true
