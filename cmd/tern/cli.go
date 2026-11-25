@@ -2,18 +2,23 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
 	"io"
 	"os"
 	"os/signal"
+	"strconv"
 	"strings"
 	"syscall"
+	"text/tabwriter"
+	"time"
 
 	"github.com/tern-agent/tern/internal/agent"
 	"github.com/tern-agent/tern/internal/config"
 	"github.com/tern-agent/tern/internal/provider"
+	"github.com/tern-agent/tern/internal/session"
 	"github.com/tern-agent/tern/internal/subagent"
 	"github.com/tern-agent/tern/internal/tui"
 )
@@ -88,6 +93,8 @@ func runWithOptions(o runOptions) int {
 			return 0
 		case "config":
 			return runConfigCommand(o.Args[1:], o)
+		case "stats":
+			return runStatsCommand(o.Args[1:], o)
 		case "update":
 			return runUpdateCommand(o.Out, o.Err)
 		}
@@ -297,6 +304,7 @@ func printUsage(w io.Writer) {
 Usage:
   tern [flags]
   tern config
+  tern stats [--json]
   tern update
   tern version
 
@@ -361,6 +369,231 @@ func runConfigCommand(args []string, o runOptions) int {
 	}
 	_, _ = io.WriteString(o.Out, cfg.FormatEffective())
 	return 0
+}
+
+func printStatsUsage(w io.Writer) {
+	fmt.Fprintln(w, `tern stats - show historical usage and activity
+
+Usage:
+  tern stats [--json]
+
+Flags:
+      --json    emit the raw AggregateStats JSON
+  -h, --help    show this help`)
+}
+
+// runStatsCommand prints the historical usage rollup for every session in the
+// data directory.
+func runStatsCommand(args []string, o runOptions) int {
+	fs := flag.NewFlagSet("tern stats", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	var jsonOut, help bool
+	fs.BoolVar(&jsonOut, "json", false, "emit the raw AggregateStats JSON")
+	fs.BoolVar(&help, "help", false, "show help")
+	fs.BoolVar(&help, "h", false, "show help")
+	if err := fs.Parse(args); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			printStatsUsage(o.Out)
+			return 0
+		}
+		fmt.Fprintf(o.Err, "tern stats: %v\n", err)
+		return 2
+	}
+	if help {
+		printStatsUsage(o.Out)
+		return 0
+	}
+	if rest := fs.Args(); len(rest) > 0 {
+		fmt.Fprintf(o.Err, "tern stats: unexpected argument %q\n", rest[0])
+		return 2
+	}
+
+	dataDir, err := config.DataDir()
+	if err != nil {
+		fmt.Fprintf(o.Err, "tern stats: %v\n", err)
+		return 1
+	}
+	store, err := session.NewStore(dataDir)
+	if err != nil {
+		fmt.Fprintf(o.Err, "tern stats: %v\n", err)
+		return 1
+	}
+	stats, err := store.Stats()
+	if err != nil {
+		fmt.Fprintf(o.Err, "tern stats: %v\n", err)
+		return 1
+	}
+
+	if jsonOut {
+		enc := json.NewEncoder(o.Out)
+		enc.SetIndent("", "  ")
+		if err := enc.Encode(stats); err != nil {
+			fmt.Fprintf(o.Err, "tern stats: %v\n", err)
+			return 1
+		}
+		return 0
+	}
+	writeStatsReport(o.Out, stats)
+	return 0
+}
+
+// writeStatsReport renders the human-readable summary, per-model breakdown and
+// recent sessions table.
+func writeStatsReport(w io.Writer, s *session.AggregateStats) {
+	fmt.Fprintln(w, "tern stats")
+	fmt.Fprintln(w)
+	fmt.Fprintf(w, "  %-13s %s\n", "Sessions", countLabel(s.SessionCount, s.SubagentCount))
+	fmt.Fprintf(w, "  %-13s %s\n", "Turns", formatStatCount(s.TurnCount))
+	fmt.Fprintf(w, "  %-13s %s\n", "Messages", formatStatCount(s.MessageCount))
+	fmt.Fprintf(w, "  %-13s %s prompt / %s completion / %s total\n", "Tokens",
+		formatStatCount(s.TotalUsage.PromptTokens),
+		formatStatCount(s.TotalUsage.CompletionTokens),
+		formatStatCount(usageTokens(s.TotalUsage)))
+	fmt.Fprintf(w, "  %-13s %s\n", "Cache hit", formatCacheRate(s.CacheHitRate))
+	fmt.Fprintf(w, "  %-13s %s\n", "Active", formatStatsDuration(s.TotalDuration))
+	fmt.Fprintf(w, "  %-13s %s\n", "Avg speed", formatTokensPerSec(s.AvgTokensPerSec))
+	fmt.Fprintf(w, "  %-13s %s\n", "Total cost", formatStatsCost(s.TotalCostUSD))
+	fmt.Fprintf(w, "  %-13s %s\n", "First session", formatStatTime(s.FirstSessionAt))
+	fmt.Fprintf(w, "  %-13s %s\n", "Last session", formatStatTime(s.LastSessionAt))
+
+	if len(s.Models) > 0 {
+		fmt.Fprintln(w)
+		fmt.Fprintln(w, "Models")
+		tw := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
+		fmt.Fprintln(tw, "  MODEL\tSESSIONS\tTURNS\tTOKENS\tCACHE\tACTIVE\tTOK/S\tCOST")
+		for _, m := range s.Models {
+			fmt.Fprintf(tw, "  %s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
+				truncateStat(m.Model, 28),
+				formatStatCount(m.Sessions),
+				formatStatCount(m.Turns),
+				formatStatCount(usageTokens(m.Usage)),
+				formatCacheRate(cacheRate(m.Usage)),
+				formatStatsDuration(m.Duration),
+				formatTokensPerSec(m.AvgTokensPerSec),
+				formatStatsCost(m.CostUSD))
+		}
+		_ = tw.Flush()
+	}
+
+	if len(s.Sessions) > 0 {
+		const recentLimit = 10
+		fmt.Fprintln(w)
+		fmt.Fprintln(w, "Recent sessions")
+		tw := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
+		fmt.Fprintln(tw, "  ID\tNAME\tMODEL\tTURNS\tTOKENS\tCACHE\tACTIVE\tTOK/S\tCOST\tUPDATED")
+		limit := len(s.Sessions)
+		if limit > recentLimit {
+			limit = recentLimit
+		}
+		for _, row := range s.Sessions[:limit] {
+			fmt.Fprintf(tw, "  %s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
+				truncateStat(row.ID, 24),
+				truncateStat(row.Name, 24),
+				truncateStat(row.Model, 20),
+				formatStatCount(row.Turns),
+				formatStatCount(usageTokens(row.Usage)),
+				formatCacheRate(row.CacheHitRate),
+				formatStatsDuration(row.Duration),
+				formatTokensPerSec(row.AvgTokensPerSec),
+				formatStatsCost(row.CostUSD),
+				formatStatTime(row.UpdatedAt))
+		}
+		_ = tw.Flush()
+		if remaining := len(s.Sessions) - limit; remaining > 0 {
+			fmt.Fprintf(w, "  ... %d more session(s)\n", remaining)
+		}
+	}
+}
+
+func countLabel(sessions, subagents int) string {
+	if subagents == 0 {
+		return formatStatCount(sessions)
+	}
+	return fmt.Sprintf("%s (%s sub-agent(s))", formatStatCount(sessions), formatStatCount(subagents))
+}
+
+func usageTokens(u provider.Usage) int {
+	if u.TotalTokens > 0 {
+		return u.TotalTokens
+	}
+	return u.PromptTokens + u.CompletionTokens
+}
+
+func cacheRate(u provider.Usage) float64 {
+	if denom := u.PromptCacheHitTokens + u.PromptCacheMissTokens; denom > 0 {
+		return float64(u.PromptCacheHitTokens) / float64(denom)
+	}
+	if u.PromptTokens > 0 {
+		return float64(u.PromptCacheHitTokens) / float64(u.PromptTokens)
+	}
+	return 0
+}
+
+func formatCacheRate(rate float64) string {
+	if rate <= 0 {
+		return "0.0%"
+	}
+	return fmt.Sprintf("%.1f%%", rate*100)
+}
+
+func formatTokensPerSec(v float64) string {
+	return fmt.Sprintf("%.1f tok/s", v)
+}
+
+func formatStatsCost(cost float64) string {
+	return fmt.Sprintf("$%.4f", cost)
+}
+
+func formatStatTime(t time.Time) string {
+	if t.IsZero() {
+		return "-"
+	}
+	return t.Local().Format("2006-01-02 15:04")
+}
+
+func formatStatsDuration(d time.Duration) string {
+	if d <= 0 {
+		return "0s"
+	}
+	if d < time.Minute {
+		return fmt.Sprintf("%.1fs", d.Seconds())
+	}
+	d = d.Round(time.Second)
+	hours := int(d / time.Hour)
+	d -= time.Duration(hours) * time.Hour
+	minutes := int(d / time.Minute)
+	d -= time.Duration(minutes) * time.Minute
+	seconds := int(d / time.Second)
+	if hours > 0 {
+		return fmt.Sprintf("%dh%02dm", hours, minutes)
+	}
+	return fmt.Sprintf("%dm%02ds", minutes, seconds)
+}
+
+func formatStatCount(n int) string {
+	if n < 0 {
+		return "-" + formatStatCount(-n)
+	}
+	digits := strconv.Itoa(n)
+	var b strings.Builder
+	for i, r := range digits {
+		if i > 0 && (len(digits)-i)%3 == 0 {
+			b.WriteByte(',')
+		}
+		b.WriteRune(r)
+	}
+	return b.String()
+}
+
+func truncateStat(s string, max int) string {
+	runes := []rune(s)
+	if len(runes) <= max {
+		return s
+	}
+	if max <= 3 {
+		return string(runes[:max])
+	}
+	return string(runes[:max-3]) + "..."
 }
 
 func combinePrompt(prompt, piped string) string {

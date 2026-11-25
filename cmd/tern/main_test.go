@@ -17,9 +17,11 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/tern-agent/tern/internal/agent"
 	"github.com/tern-agent/tern/internal/provider"
+	"github.com/tern-agent/tern/internal/session"
 )
 
 func testRunOptions(t *testing.T) runOptions {
@@ -248,6 +250,168 @@ func TestRPCModePromptStatusQuit(t *testing.T) {
 	quit, ok := responses["3"]["result"].(map[string]any)
 	if !ok || quit["quit"] != true {
 		t.Fatalf("bad quit response: %+v", responses["3"])
+	}
+}
+
+func TestStatsCommandTextAndJSON(t *testing.T) {
+	o := testRunOptions(t)
+	store, err := session.NewStore(os.Getenv("TERN_DATA_DIR"))
+	if err != nil {
+		t.Fatalf("NewStore: %v", err)
+	}
+	sess, err := store.Create(session.SessionMeta{
+		ID:      "session-stats-text",
+		Name:    "Stats Session",
+		Model:   "mock-model",
+		WorkDir: o.WorkDir,
+	})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if err := sess.AppendMessage(provider.Message{Role: provider.RoleUser, Content: "hello stats"}); err != nil {
+		t.Fatalf("AppendMessage: %v", err)
+	}
+	if err := sess.AppendUsageWithDuration(provider.Usage{
+		PromptTokens:          100,
+		CompletionTokens:      50,
+		TotalTokens:           150,
+		PromptCacheHitTokens:  60,
+		PromptCacheMissTokens: 40,
+	}, 0.5, "hash", 10*time.Second); err != nil {
+		t.Fatalf("AppendUsageWithDuration: %v", err)
+	}
+
+	o.Args = []string{"stats"}
+	if code := runWithOptions(o); code != 0 {
+		t.Fatalf("tern stats exit %d, stderr: %s", code, o.Err.(*bytes.Buffer).String())
+	}
+	text := o.Out.(*bytes.Buffer).String()
+	for _, want := range []string{
+		"tern stats",
+		"Sessions",
+		"mock-model",
+		"Stats Session",
+		"150",
+		"60.0%",
+		"10.0s",
+		"5.0 tok/s",
+		"$0.5000",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("stats output missing %q:\n%s", want, text)
+		}
+	}
+
+	jsonOut := &bytes.Buffer{}
+	jsonErr := &bytes.Buffer{}
+	jsonOpts := o
+	jsonOpts.Args = []string{"stats", "--json"}
+	jsonOpts.Out = jsonOut
+	jsonOpts.Err = jsonErr
+	if code := runWithOptions(jsonOpts); code != 0 {
+		t.Fatalf("tern stats --json exit %d, stderr: %s", code, jsonErr.String())
+	}
+	var got session.AggregateStats
+	if err := json.Unmarshal(jsonOut.Bytes(), &got); err != nil {
+		t.Fatalf("stats JSON is invalid: %v\n%s", err, jsonOut.String())
+	}
+	if got.SessionCount != 1 || got.TurnCount != 1 || got.MessageCount != 1 {
+		t.Fatalf("unexpected JSON counts: %+v", got)
+	}
+	if got.TotalUsage.TotalTokens != 150 || got.TotalUsage.PromptCacheHitTokens != 60 {
+		t.Fatalf("unexpected JSON usage: %+v", got.TotalUsage)
+	}
+	if got.TotalCostUSD != 0.5 || got.TotalDuration != 10*time.Second {
+		t.Fatalf("unexpected JSON totals: cost=%v duration=%v", got.TotalCostUSD, got.TotalDuration)
+	}
+	if len(got.Models) != 1 || got.Models[0].Model != "mock-model" {
+		t.Fatalf("unexpected JSON models: %+v", got.Models)
+	}
+	if len(got.Sessions) != 1 || got.Sessions[0].Name != "Stats Session" {
+		t.Fatalf("unexpected JSON sessions: %+v", got.Sessions)
+	}
+}
+
+func TestProjectLocalMCPAndHookConfigs(t *testing.T) {
+	o := testRunOptions(t)
+	configDir := os.Getenv("TERN_CONFIG_DIR")
+	projectDir := filepath.Join(o.WorkDir, ".tern")
+	if err := os.MkdirAll(configDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(projectDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	writeFile := func(path, body string) {
+		t.Helper()
+		if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	writeFile(filepath.Join(configDir, "hooks.toml"), `
+[[hooks]]
+event = "session_start"
+command = "global-hook"
+`)
+	writeFile(filepath.Join(projectDir, "hooks.toml"), `
+[[hooks]]
+event = "before_tool"
+command = "project-hook"
+matcher = "bash"
+`)
+	writeFile(filepath.Join(configDir, "mcp.toml"), `
+[[servers]]
+name = "shared"
+command = "global-server"
+
+[[servers]]
+name = "global-only"
+url = "https://global.example/mcp"
+`)
+	writeFile(filepath.Join(projectDir, "mcp.toml"), `
+[[servers]]
+name = "shared"
+command = "project-server"
+
+[[servers]]
+name = "project-only"
+command = "project-only-server"
+`)
+
+	hooks, hookWarnings := loadHookConfigs(configDir, o.WorkDir)
+	if len(hookWarnings) != 0 {
+		t.Fatalf("unexpected hook warnings: %v", hookWarnings)
+	}
+	if len(hooks) != 2 {
+		t.Fatalf("hooks = %+v, want 2 (global + project)", hooks)
+	}
+	if hooks[0].Command != "global-hook" || hooks[0].Event != "session_start" {
+		t.Fatalf("global hook not loaded first: %+v", hooks[0])
+	}
+	if hooks[1].Command != "project-hook" || hooks[1].Event != "before_tool" || hooks[1].Matcher != "bash" {
+		t.Fatalf("project hook not loaded: %+v", hooks[1])
+	}
+
+	servers, mcpWarnings := loadMCPConfigs(configDir, o.WorkDir)
+	if len(mcpWarnings) != 0 {
+		t.Fatalf("unexpected mcp warnings: %v", mcpWarnings)
+	}
+	if len(servers) != 3 {
+		t.Fatalf("servers = %+v, want 3", servers)
+	}
+	byName := make(map[string]int, len(servers))
+	for i, s := range servers {
+		byName[s.Name] = i
+	}
+	if i, ok := byName["shared"]; !ok || servers[i].Command != "project-server" {
+		t.Fatalf("project server did not override global: %+v", servers)
+	}
+	if i, ok := byName["global-only"]; !ok || servers[i].URL != "https://global.example/mcp" {
+		t.Fatalf("global-only server missing: %+v", servers)
+	}
+	if i, ok := byName["project-only"]; !ok || servers[i].Command != "project-only-server" {
+		t.Fatalf("project-only server missing: %+v", servers)
 	}
 }
 

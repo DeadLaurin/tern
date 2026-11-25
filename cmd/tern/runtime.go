@@ -168,11 +168,11 @@ func BuildRuntime(opts RuntimeOptions) (*Runtime, error) {
 	// Hooks and MCP servers are optional extensions. Broken extension files
 	// are reported as warnings rather than preventing the session from
 	// starting.
-	hookConfigs, hookWarnings := loadHookConfigs(configDir)
+	hookConfigs, hookWarnings := loadHookConfigs(configDir, workDir)
 	rt.Warnings = append(rt.Warnings, hookWarnings...)
 	rt.Hooks = ext.NewRunner(hookConfigs...)
 
-	mcpConfigs, mcpWarnings := loadMCPConfigs(configDir)
+	mcpConfigs, mcpWarnings := loadMCPConfigs(configDir, workDir)
 	rt.Warnings = append(rt.Warnings, mcpWarnings...)
 	rt.MCP = ext.NewManager(mcpConfigs...)
 
@@ -361,8 +361,32 @@ type hooksFile struct {
 	} `toml:"hooks"`
 }
 
-func loadHookConfigs(configDir string) ([]ext.HookConfig, []string) {
-	path := filepath.Join(configDir, "hooks.toml")
+// extensionFilePaths returns the global and project-local locations for one
+// extension config file, in load order. Project-local entries are appended
+// (hooks) or override by name (MCP servers).
+func extensionFilePaths(configDir, workDir, name string) []string {
+	paths := []string{filepath.Join(configDir, name)}
+	if workDir = strings.TrimSpace(workDir); workDir != "" {
+		projectPath := filepath.Join(workDir, ".tern", name)
+		if projectPath != paths[0] {
+			paths = append(paths, projectPath)
+		}
+	}
+	return paths
+}
+
+func loadHookConfigs(configDir, workDir string) ([]ext.HookConfig, []string) {
+	var out []ext.HookConfig
+	var warnings []string
+	for _, path := range extensionFilePaths(configDir, workDir, "hooks.toml") {
+		cfgs, warns := loadHookFile(path)
+		out = append(out, cfgs...)
+		warnings = append(warnings, warns...)
+	}
+	return out, warnings
+}
+
+func loadHookFile(path string) ([]ext.HookConfig, []string) {
 	var file hooksFile
 	if _, err := os.Stat(path); err != nil {
 		if errors.Is(err, os.ErrNotExist) {
@@ -407,8 +431,28 @@ type mcpFile struct {
 	} `toml:"servers"`
 }
 
-func loadMCPConfigs(configDir string) ([]ext.ServerConfig, []string) {
-	path := filepath.Join(configDir, "mcp.toml")
+func loadMCPConfigs(configDir, workDir string) ([]ext.ServerConfig, []string) {
+	var out []ext.ServerConfig
+	var warnings []string
+	// Project-local servers override global ones with the same name while
+	// keeping the global ordering stable.
+	index := map[string]int{}
+	for _, path := range extensionFilePaths(configDir, workDir, "mcp.toml") {
+		cfgs, warns := loadMCPFile(path)
+		warnings = append(warnings, warns...)
+		for _, cfg := range cfgs {
+			if i, ok := index[cfg.Name]; ok {
+				out[i] = cfg
+				continue
+			}
+			index[cfg.Name] = len(out)
+			out = append(out, cfg)
+		}
+	}
+	return out, warnings
+}
+
+func loadMCPFile(path string) ([]ext.ServerConfig, []string) {
 	var file mcpFile
 	if _, err := os.Stat(path); err != nil {
 		if errors.Is(err, os.ErrNotExist) {
@@ -419,8 +463,9 @@ func loadMCPConfigs(configDir string) ([]ext.ServerConfig, []string) {
 	if _, err := toml.DecodeFile(path, &file); err != nil {
 		return nil, []string{fmt.Sprintf("mcp: decode %s: %v", path, err)}
 	}
+	var warnings []string
 	out := make([]ext.ServerConfig, 0, len(file.Servers))
-	for _, s := range file.Servers {
+	for i, s := range file.Servers {
 		cfg := ext.ServerConfig{
 			Name:      strings.TrimSpace(s.Name),
 			Transport: strings.TrimSpace(s.Transport),
@@ -433,7 +478,11 @@ func loadMCPConfigs(configDir string) ([]ext.ServerConfig, []string) {
 		if s.TimeoutSeconds > 0 {
 			cfg.Timeout = time.Duration(s.TimeoutSeconds) * time.Second
 		}
+		if cfg.Name == "" {
+			warnings = append(warnings, fmt.Sprintf("mcp: %s: entry %d: server name is required", path, i+1))
+			continue
+		}
 		out = append(out, cfg)
 	}
-	return out, nil
+	return out, warnings
 }
