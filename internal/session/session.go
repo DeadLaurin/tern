@@ -131,6 +131,7 @@ type record struct {
 	Usage      *provider.Usage   `json:"usage,omitempty"`
 	CostUSD    float64           `json:"cost_usd,omitempty"`
 	PrefixHash string            `json:"prefix_hash,omitempty"`
+	DurationMs int64             `json:"duration_ms,omitempty"`
 	Compaction *CompactionEvent  `json:"compaction,omitempty"`
 	Subagent   *SubagentLink     `json:"subagent_link,omitempty"`
 	Rename     string            `json:"rename,omitempty"`
@@ -398,6 +399,34 @@ func (s *Store) Fork(sessionID string, newName string) (*Session, error) {
 	return s.Open(newID)
 }
 
+// Delete removes a parent transcript and every linked child transcript. The
+// session id is validated first so a crafted id cannot escape the store.
+func (s *Store) Delete(sessionID string) error {
+	if err := validateID(sessionID); err != nil {
+		return err
+	}
+	path := s.Path(sessionID)
+	if _, err := os.Stat(path); err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("%w: %s", ErrSessionNotFound, sessionID)
+		}
+		return fmt.Errorf("session: stat %s: %w", path, err)
+	}
+	children, err := s.childIDs(sessionID)
+	if err != nil {
+		return err
+	}
+	for _, childID := range children {
+		if err := os.Remove(s.Path(childID)); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("session: delete %s: %w", childID, err)
+		}
+	}
+	if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("session: delete %s: %w", sessionID, err)
+	}
+	return nil
+}
+
 // Rename appends a rename record to the transcript.
 func (s *Store) Rename(sessionID, name string) error {
 	sess, err := s.Open(sessionID)
@@ -481,11 +510,24 @@ func (s *Session) AppendMessageExternal(msg provider.Message, external bool) err
 
 // AppendUsage records token usage, estimated cost and the request prefix hash.
 func (s *Session) AppendUsage(u provider.Usage, costUSD float64, prefixHash string) error {
+	return s.AppendUsageWithDuration(u, costUSD, prefixHash, 0)
+}
+
+// AppendUsageWithDuration records usage plus the wall-clock time the request
+// took. A non-positive duration is omitted so older records stay readable.
+func (s *Session) AppendUsageWithDuration(u provider.Usage, costUSD float64, prefixHash string, duration time.Duration) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	now := time.Now().UTC()
 	usage := u
-	rec := record{Type: RecordUsage, Timestamp: now, Usage: &usage, CostUSD: costUSD, PrefixHash: prefixHash}
+	durationMs := int64(0)
+	if duration > 0 {
+		durationMs = duration.Milliseconds()
+		if durationMs == 0 {
+			durationMs = 1
+		}
+	}
+	rec := record{Type: RecordUsage, Timestamp: now, Usage: &usage, CostUSD: costUSD, PrefixHash: prefixHash, DurationMs: durationMs}
 	if err := appendRecord(s.path, rec); err != nil {
 		return err
 	}
