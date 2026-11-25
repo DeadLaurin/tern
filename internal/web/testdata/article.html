@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Go Concurrency &amp; You</title>
+  <style>body { color: red }</style>
+  <script>window.track = function () { if (1 < 2) { return "ok"; } };</script>
+</head>
+<body>
+  <header><h1>Site header</h1></header>
+  <nav><a href="/">Home</a> | <a href="/about">About</a></nav>
+  <main>
+    <article>
+      <h1>Go Concurrency &amp; You</h1>
+      <p>Goroutines are <strong>cheap</strong> and <em>fun</em>. Use <code>go f()</code> to start one&nbsp;today.</p>
+      <p>Read the <a href="https://go.dev/doc/">official docs</a> and the <a href="/articles/channels">channels guide</a>.</p>
+      <h2>Why channels?</h2>
+      <ul>
+        <li>Communicate by <strong>sharing memory</strong></li>
+        <li>Wait for work to finish
+          <ul>
+            <li>With <code>sync.WaitGroup</code></li>
+            <li>Or with a done channel</li>
+          </ul>
+        </li>
+      </ul>
+      <h3>Steps</h3>
+      <ol>
+        <li>Start the worker</li>
+        <li>Send jobs</li>
+        <li>Close the channel</li>
+      </ol>
+      <blockquote>
+        <p>Don&rsquo;t communicate by sharing memory; share memory by communicating.</p>
+      </blockquote>
+      <pre><code class="language-go">func main() {
+    ch := make(chan int)
+    go func() { ch &lt;- 1 }()
+    fmt.Println(&lt;-ch)
+}</code></pre>
+      <hr>
+      <p>Entities: &copy; 2024 &mdash; &quot;quoted&quot; &#39;single&#39; &amp;amp; done.</p>
+    </article>
+  </main>
+  <aside><p>Related: <a href="/x">x</a></p></aside>
+  <footer><p>&copy; tern</p></footer>
+</body>
+</html>
