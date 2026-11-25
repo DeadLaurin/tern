@@ -1,0 +1,6 @@
+/tern
+/tern.exe
+/dist/
+*.test
+*.out
+.DS_Store
