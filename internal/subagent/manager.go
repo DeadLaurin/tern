@@ -157,7 +157,39 @@ func NewManager(cfg Config) *Manager {
 }
 
 // Config returns the effective configuration.
-func (m *Manager) Config() Config { return m.cfg }
+func (m *Manager) Config() Config {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.cfg
+}
+
+// SetPermission updates the parent permission evaluator inherited by new
+// sub-agents (for example when toggling YOLO or plan mode at runtime).
+func (m *Manager) SetPermission(p *permission.Evaluator) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.cfg.Permission = p
+	m.cfg.PlanMode = p != nil && p.Mode() == permission.ModePlan
+}
+
+// SetModel updates the default model used by new sub-agents.
+func (m *Manager) SetModel(model string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if strings.TrimSpace(model) != "" {
+		m.cfg.Model = strings.TrimSpace(model)
+	}
+}
+
+// SetReasoningEffort updates the default reasoning effort used by new
+// sub-agents.
+func (m *Manager) SetReasoningEffort(effort string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if strings.TrimSpace(effort) != "" {
+		m.cfg.ReasoningEffort = strings.TrimSpace(effort)
+	}
+}
 
 // Budget returns the shared cost budget.
 func (m *Manager) Budget() *Budget { return m.budget }
@@ -307,15 +339,22 @@ func (m *Manager) Run(ctx context.Context, task Task) AgentReport {
 		return finish(limitReport(id, task, "session cost budget reached"))
 	}
 
-	forceReadOnly := m.cfg.PlanMode || def.ReadOnly
-	if m.cfg.Permission != nil && m.cfg.Permission.Mode() == permission.ModePlan {
+	m.mu.Lock()
+	cfgPerm := m.cfg.Permission
+	cfgPlanMode := m.cfg.PlanMode
+	cfgModel := m.cfg.Model
+	cfgEffort := m.cfg.ReasoningEffort
+	m.mu.Unlock()
+
+	forceReadOnly := cfgPlanMode || def.ReadOnly
+	if cfgPerm != nil && cfgPerm.Mode() == permission.ModePlan {
 		forceReadOnly = true
 	}
 	override := strings.TrimSpace(def.Permission)
 	if strings.TrimSpace(task.ApprovalMode) != "" {
 		override = task.ApprovalMode
 	}
-	childPerm := permission.DeriveChild(m.cfg.Permission, override, forceReadOnly)
+	childPerm := permission.DeriveChild(cfgPerm, override, forceReadOnly)
 
 	maxSteps := m.cfg.MaxSteps
 	if task.MaxSteps > 0 {
@@ -326,7 +365,7 @@ func (m *Manager) Run(ctx context.Context, task Task) AgentReport {
 		model = strings.TrimSpace(def.Model)
 	}
 	if model == "" {
-		model = m.cfg.Model
+		model = cfgModel
 	}
 
 	runner := &Runner{
@@ -346,7 +385,7 @@ func (m *Manager) Run(ctx context.Context, task Task) AgentReport {
 		Locker:           m.locker,
 		Budget:           m.budget,
 		MaxSteps:         maxSteps,
-		ReasoningEffort:  m.cfg.ReasoningEffort,
+		ReasoningEffort:  cfgEffort,
 		CostFunc:         m.cfg.CostFunc,
 		Emit: func(ev Event) {
 			ev.ParentToolCallID = task.ParentToolCallID

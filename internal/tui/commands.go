@@ -377,6 +377,9 @@ func (m *Model) applyPermissionMode(mode permission.Mode) {
 			policy.WorkDir = m.opts.WorkDir
 			m.opts.Agent.Permissions = permission.New(policy)
 		}
+		if m.opts.Subagent != nil {
+			m.opts.Subagent.SetPermission(m.opts.Agent.Permissions)
+		}
 		if m.opts.Agent.Config != nil {
 			m.opts.Agent.Config.PermissionMode = mode.String()
 		} else {

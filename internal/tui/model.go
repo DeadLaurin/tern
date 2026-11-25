@@ -1351,10 +1351,14 @@ func (m *Model) renderWelcome() string {
 	dim := func(text string) string { return m.st.paint(m.st.dim, text) }
 	key := func(text string) string { return m.st.paint(m.st.info, text) }
 	lines := make([]string, 0, 16)
-	// The emblem is a quiet silhouette: omit it on terminals too short or too
-	// narrow to show it without clipping.
-	if m.height >= 18 && m.width >= 34 {
-		for _, line := range ternEmblem {
+	// The emblem is a quiet soaring-tern silhouette: omit it on terminals too
+	// short or too narrow to show it without clipping.
+	if m.height >= 20 && m.mainWidth() >= 40 {
+		art := ternEmblemBlock
+		if m.st.plain {
+			art = ternEmblem
+		}
+		for _, line := range art {
 			lines = append(lines, m.st.paint(m.st.quote, line))
 		}
 		lines = append(lines, "")
@@ -1371,8 +1375,23 @@ func (m *Model) renderWelcome() string {
 	return strings.Join(lines, "\n")
 }
 
-// ternEmblem is the compact soaring-tern silhouette shown above the banner.
-// It is pure ASCII so NO_COLOR and plain sessions stay ANSI- and Unicode-free.
+// ternEmblemBlock is the crisp half-block soaring-tern silhouette rendered on
+// color/Unicode terminals.
+var ternEmblemBlock = []string{
+	"▄▄▄▄                                 ▄",
+	" ▀████▄                           ▄███",
+	"   ▀██████▄                    ▄█████ ",
+	"     ▀▀██████▄▄▄            ▄▄█████▀  ",
+	"       ▀▀████████▄      ▄▄███████▀    ",
+	"          ▀████████▄ ▄▄██████▀▀       ",
+	"            ███████████████▀          ",
+	"             ▀███████████████▄▄       ",
+	"      ██████████████████████▀▀▀█▄▄    ",
+	"       ██████▀▀▀▀████▀▀▀▀▀            ",
+}
+
+// ternEmblem is the pure-ASCII fallback silhouette used for NO_COLOR / plain
+// sessions so redirected output stays ANSI- and Unicode-free.
 var ternEmblem = []string{
 	" \\`.                  .'/",
 	"  \\ `-.            .-' /",
