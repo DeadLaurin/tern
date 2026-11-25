@@ -1612,7 +1612,7 @@ func (m *Model) helpModalView() string {
 	if end < len(m.modal.helpItems) {
 		b.WriteString(m.st.paint(m.st.dim, fmt.Sprintf("  … %d below\n", len(m.modal.helpItems)-end)))
 	}
-	b.WriteString("\n" + m.st.paint(m.st.dim, "Keys  Ctrl+P model · Shift+Tab effort · Ctrl+T details · Ctrl+O agents · Ctrl+C cancel/quit"))
+	b.WriteString("\n" + m.st.paint(m.st.dim, "Keys  Ctrl+P model · Shift+Tab effort · Ctrl+T details · Ctrl+O agents · Ctrl+B sidebar · Ctrl+C cancel/quit"))
 	current := m.modal.helpItems[m.modal.index]
 	footer := current.usage + " — " + current.detail + " · ↑/↓ scroll · enter run · esc close"
 	return m.modalFrame("Help", strings.TrimRight(b.String(), "\n"), footer)

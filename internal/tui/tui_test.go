@@ -17,6 +17,7 @@ import (
 	"github.com/tern-agent/tern/internal/provider"
 	"github.com/tern-agent/tern/internal/session"
 	"github.com/tern-agent/tern/internal/subagent"
+	"github.com/tern-agent/tern/internal/tools"
 )
 
 func newTestModel(t *testing.T, opts Options) *Model {
@@ -855,8 +856,8 @@ func TestStatsModalRenderingAndResume(t *testing.T) {
 			t.Fatalf("stats view missing visual gauge/sparkline %q:\n%s", want, view)
 		}
 	}
-	if lines := strings.Count(view, "\n"); lines > 22 {
-		t.Fatalf("stats view too tall (%d lines):\n%s", lines, view)
+	if lines := strings.Count(view, "\n"); lines > m.height {
+		t.Fatalf("stats view taller than the terminal (%d lines):\n%s", lines, view)
 	}
 	press(t, m, tea.KeyEnter)
 	if m.opts.Session == nil || m.opts.Session.ID() != sess.ID() {
@@ -1514,5 +1515,127 @@ func TestTextOnlyTokensPerSecondTracking(t *testing.T) {
 	m.Update(agentEventMsg{event: agent.Event{Type: agent.EventTurnEnd, TokensPerSec: 0}})
 	if m.liveSpeed != 77 {
 		t.Fatalf("zero tok/s usage erased text speed: got %v want 77", m.liveSpeed)
+	}
+}
+
+func TestTwoPaneSidebarRenderingAndToggle(t *testing.T) {
+	m := newTestModel(t, Options{GitBranch: "main"})
+	m.width = 140
+	m.height = 40
+
+	view := m.View()
+	for _, want := range []string{"CONTEXT", "STATS", "SUB-AGENTS", "Ctx", "Cache", "main"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("wide two-pane view missing %q:\n%s", want, view)
+		}
+	}
+	if !strings.Contains(view, "|") {
+		t.Fatalf("wide view missing the pane divider:\n%s", view)
+	}
+	if m.sidebarHidden {
+		t.Fatal("sidebar should be visible by default")
+	}
+
+	press(t, m, tea.KeyCtrlB)
+	if !m.sidebarHidden {
+		t.Fatal("Ctrl+B did not hide the sidebar")
+	}
+	view = m.View()
+	if strings.Contains(view, "CONTEXT & STATS") || strings.Contains(view, "SUB-AGENTS · idle") {
+		t.Fatalf("hidden sidebar still rendered:\n%s", view)
+	}
+
+	press(t, m, tea.KeyCtrlB)
+	if m.sidebarHidden {
+		t.Fatal("Ctrl+B did not restore the sidebar")
+	}
+	if !strings.Contains(m.View(), "CONTEXT & STATS") {
+		t.Fatalf("restored sidebar missing:\n%s", m.View())
+	}
+}
+
+func TestNarrowTerminalCollapsesToSinglePane(t *testing.T) {
+	m := newTestModel(t, Options{GitBranch: "main"})
+	m.width = 80
+	m.height = 24
+	typeText(t, m, "hello narrow")
+
+	view := m.View()
+	if strings.Contains(view, "CONTEXT & STATS") {
+		t.Fatalf("narrow layout rendered the sidebar:\n%s", view)
+	}
+	if leadingSpaces(lineContaining(view, "hello narrow")) != 0 {
+		t.Fatalf("narrow layout should not center a wide column:\n%s", view)
+	}
+	for _, line := range strings.Split(view, "\n") {
+		if displayWidth(line) > m.width {
+			t.Fatalf("narrow view line overflows %d columns: %q", m.width, line)
+		}
+	}
+}
+
+func TestSubagentsLiveInSidebarAndFocusCycles(t *testing.T) {
+	m := newTestModel(t, Options{})
+	m.width = 140
+	m.height = 40
+	for _, event := range []subagent.Event{
+		{Type: subagent.EventSubagentStart, AgentID: "agent-1", AgentType: subagent.AgentExplore, Description: "find the parser", Status: subagent.StatusRunning},
+		{Type: subagent.EventSubagentStart, AgentID: "agent-2", AgentType: subagent.AgentReview, Description: "review the patch", Status: subagent.StatusRunning},
+		{Type: subagent.EventSubagentDelta, AgentID: "agent-1", AgentType: subagent.AgentExplore, Description: "find the parser", Status: subagent.StatusRunning, Detail: "reading parser.go"},
+	} {
+		m.Update(subagentEventMsg{event: event})
+	}
+	m.Update(tickMsg(time.Now()))
+
+	view := m.View()
+	if !strings.Contains(view, "SUB-AGENTS") || !strings.Contains(view, "find the parser") {
+		t.Fatalf("sidebar missing live sub-agents:\n%s", view)
+	}
+	agentLine := lineContaining(view, "find the parser")
+	if leadingSpaces(agentLine) <= m.leftPaneWidth() {
+		t.Fatalf("sub-agent rendered in the chat pane instead of the sidebar:\n%s", view)
+	}
+
+	press(t, m, tea.KeyTab)
+	if !m.agentsOpen {
+		t.Fatal("Tab did not focus the sidebar sub-agent list")
+	}
+	view = m.View()
+	if !strings.Contains(view, "reading parser.go") {
+		t.Fatalf("focused sidebar agent missing live output:\n%s", view)
+	}
+	if !strings.Contains(view, "c cancel") || !strings.Contains(view, "Esc chat") {
+		t.Fatalf("focused sidebar missing cancel/unfocus hints:\n%s", view)
+	}
+
+	first := m.agentFocus
+	press(t, m, tea.KeyDown)
+	if m.agentFocus == first {
+		t.Fatal("down did not cycle the focused sub-agent")
+	}
+	press(t, m, tea.KeyEsc)
+	if m.agentsOpen {
+		t.Fatal("Esc did not return focus to the chat")
+	}
+}
+
+func TestTodosRenderInSidebar(t *testing.T) {
+	store := tools.NewTodoStore()
+	if _, err := store.Replace([]tools.TodoItem{
+		{ID: "1", Content: "read the files", Status: tools.TodoCompleted},
+		{ID: "2", Content: "write the code", Status: tools.TodoInProgress},
+		{ID: "3", Content: "ship it", Status: tools.TodoPending},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	m := newTestModel(t, Options{Todos: store})
+	m.width = 140
+	m.height = 40
+
+	view := m.View()
+	for _, want := range []string{"TODOS (1/3)", "read the files", "write the code", "ship it"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("sidebar todos missing %q:\n%s", want, view)
+		}
 	}
 }

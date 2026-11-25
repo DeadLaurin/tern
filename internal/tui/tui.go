@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
@@ -100,16 +101,17 @@ func Run(ctx context.Context, opts Options) error {
 func New(opts Options) *Model {
 	opts = normalizeOptions(opts)
 	m := &Model{
-		opts:       opts,
-		st:         newStyles(noColor(opts.NoColor)),
-		ed:         newEditor(),
-		bus:        newEventBus(),
-		viewport:   viewport.New(0, 0),
-		agents:     make(map[string]*agentBlock),
-		agentLines: make(map[string]*strings.Builder),
-		statusMsg:  "Ready",
-		followTail: true,
-		ctxWindow:  defaultContextWindow(opts),
+		opts:         opts,
+		st:           newStyles(noColor(opts.NoColor)),
+		ed:           newEditor(),
+		bus:          newEventBus(),
+		viewport:     viewport.New(0, 0),
+		agents:       make(map[string]*agentBlock),
+		agentLines:   make(map[string]*strings.Builder),
+		statusMsg:    "Ready",
+		followTail:   true,
+		ctxWindow:    defaultContextWindow(opts),
+		sessionStart: time.Now(),
 	}
 	m.viewport.MouseWheelEnabled = true
 	m.viewport.MouseWheelDelta = 3

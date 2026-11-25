@@ -119,6 +119,11 @@ type Model struct {
 	agentsPanel bool
 	panelIndex  int
 
+	// sidebarHidden collapses the right-hand inspector so the chat can use
+	// the full terminal width. It is toggled with Ctrl+B.
+	sidebarHidden bool
+	sessionStart  time.Time
+
 	thinking       thinkingMode
 	showToolDetail bool
 
@@ -295,6 +300,16 @@ func (m *Model) handleKey(msg tea.KeyMsg) tea.Cmd {
 	if m.agentsPanel {
 		return m.handleAgentsPanelKey(msg)
 	}
+	if msg.Type == tea.KeyCtrlB {
+		m.sidebarHidden = !m.sidebarHidden
+		if m.sidebarHidden {
+			m.statusMsg = "Sidebar hidden · Ctrl+B to show"
+		} else {
+			m.statusMsg = "Sidebar shown · Ctrl+B to hide"
+		}
+		m.dirty = true
+		return nil
+	}
 	if m.activeModal != modalNone {
 		return m.handleModalKey(msg)
 	}
@@ -327,6 +342,20 @@ func (m *Model) handleKey(msg tea.KeyMsg) tea.Cmd {
 	if msg.Type == tea.KeyCtrlO {
 		m.toggleAgentFocus()
 		return nil
+	}
+	if m.agentsOpen && len(m.agentOrder) > 0 && msg.Type == tea.KeyRunes {
+		switch string(msg.Runes) {
+		case "c":
+			m.cancelFocusedAgent()
+			return nil
+		case "C":
+			if m.opts.Subagent != nil {
+				n := m.opts.Subagent.CancelAll()
+				m.addInfo(fmt.Sprintf("Cancelled %d sub-agent(s).", n))
+			}
+			m.dirty = true
+			return nil
+		}
 	}
 	if msg.Type == tea.KeyShiftTab {
 		m.cycleReasoningEffort(1)
@@ -376,7 +405,7 @@ func (m *Model) handleKey(msg tea.KeyMsg) tea.Cmd {
 			m.followTail = m.viewport.AtBottom()
 			return nil
 		}
-		if m.agentsExpanded() && m.ed.IsEmpty() {
+		if m.agentsExpanded() {
 			m.cycleAgentFocus(-1)
 			return nil
 		}
@@ -386,7 +415,7 @@ func (m *Model) handleKey(msg tea.KeyMsg) tea.Cmd {
 			m.followTail = m.viewport.AtBottom()
 			return nil
 		}
-		if m.agentsExpanded() && m.ed.IsEmpty() {
+		if m.agentsExpanded() {
 			m.cycleAgentFocus(1)
 			return nil
 		}
@@ -588,7 +617,7 @@ func (m *Model) handleTurnDone(msg turnDoneMsg) {
 		if msg.result.Usage.PromptTokens > 0 {
 			m.ctxTokens = msg.result.Usage.PromptTokens
 		}
-		if msg.result.TokensPerSec > 0 {
+		if m.acceptSpeed(msg.result.TokensPerSec) {
 			m.liveSpeed = msg.result.TokensPerSec
 			m.lastSpeed = msg.result.TokensPerSec
 		}
@@ -690,7 +719,7 @@ func (m *Model) handleAgentEvent(ev agent.Event) {
 		if ev.CacheHitRate > 0 {
 			m.cache = ev.CacheHitRate
 		}
-		if ev.TokensPerSec > 0 {
+		if m.acceptSpeed(ev.TokensPerSec) {
 			m.liveSpeed = ev.TokensPerSec
 			m.lastSpeed = ev.TokensPerSec
 		}
@@ -705,7 +734,7 @@ func (m *Model) handleAgentEvent(ev agent.Event) {
 		if ev.CacheHitRate > 0 {
 			m.cache = ev.CacheHitRate
 		}
-		if ev.TokensPerSec > 0 {
+		if m.acceptSpeed(ev.TokensPerSec) {
 			m.liveSpeed = ev.TokensPerSec
 			m.lastSpeed = ev.TokensPerSec
 		}
@@ -907,7 +936,11 @@ func (m *Model) View() string {
 		mainView = m.modalView()
 	}
 	if mainView != "" {
-		return m.finishView(strings.Join(append([]string{m.centerBlock(mainView)}, m.layoutBlock(editorView), m.layoutBlock(m.statusView())), "\n"))
+		return m.finishView(lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, mainView))
+	}
+
+	if m.twoPane() {
+		return m.finishView(m.twoPaneView())
 	}
 
 	bottom := make([]string, 0, 5)
@@ -941,10 +974,48 @@ func (m *Model) View() string {
 	return m.finishView(strings.Join(append([]string{transcript}, bottom...), "\n"))
 }
 
+// twoPaneView renders the main chat pane beside the live inspector sidebar.
+func (m *Model) twoPaneView() string {
+	leftW := m.leftPaneWidth()
+	innerW := maxInt(20, leftW-2)
+
+	bottom := make([]string, 0, 3)
+	if strings.TrimSpace(m.statusMsg) != "" {
+		bottom = append(bottom, m.st.paint(m.st.dim, m.statusMsg))
+	}
+	bottom = append(bottom, m.editorBoxView(), m.statusView())
+
+	used := 0
+	for _, part := range bottom {
+		used += lineCount(part)
+	}
+	height := m.height - used
+	if height < 1 {
+		height = 1
+	}
+	m.viewport.Width = innerW
+	m.viewport.Height = height
+	if m.followTail {
+		m.viewport.GotoBottom()
+	}
+
+	left := m.viewport.View()
+	if len(bottom) > 0 {
+		left += "\n" + strings.Join(bottom, "\n")
+	}
+	leftPane := m.padPane(left, leftW, innerW, m.height)
+	divider := m.dividerView(m.height)
+	rightPane := m.sidebarView(m.sidebarWidth(), m.height)
+	return lipgloss.JoinHorizontal(lipgloss.Top, leftPane, divider, rightPane)
+}
+
 // contentWidth is the single fixed measure used by the transcript, editor and
 // status bar. Computing it once (and never varying it per component) is what
 // keeps the column perfectly still while typing.
 func (m *Model) contentWidth() int {
+	if m.twoPane() {
+		return maxInt(20, m.leftPaneWidth()-2)
+	}
 	if m.width <= 80 {
 		return maxInt(20, m.width)
 	}
@@ -1032,6 +1103,7 @@ func asciiOnly(s string) string {
 		"✓", "[ok]", "✗", "[x]", "⚠", "!", "⊘", "[-]", "◐", "[~]",
 		"○", "[ ]", "→", "->", "↑", "^", "↓", "v", "←", "<",
 		"┃", "|", "●", "*", "┌", "+", "┐", "+", "┘", "+",
+		"◌", "o", "✕", "x", "▾", "v",
 	)
 	return replacer.Replace(s)
 }
@@ -1255,30 +1327,18 @@ func (m *Model) statusView() string {
 		modeLabel = yoloLabel
 	}
 	parts := []string{modelLabel, modeLabel}
-	if speed := m.speed(); speed > 0 {
-		parts = append(parts, formatTokensPerSec(speed))
-	}
-	if m.ctxWindow > 0 && m.ctxTokens > 0 {
-		ctxPct := int(float64(m.ctxTokens) / float64(m.ctxWindow) * 100)
-		if ctxPct < 0 {
-			ctxPct = 0
-		}
-		parts = append(parts, fmt.Sprintf("ctx %d%%", ctxPct))
-	}
-	if m.cache > 0 {
-		parts = append(parts, fmt.Sprintf("cache %d%%", int(m.cache*100+0.5)))
-	}
-	if m.totalCost > 0 {
-		parts = append(parts, fmt.Sprintf("$%.3f", m.totalCost))
-	}
 	if branch := strings.TrimSpace(m.opts.GitBranch); branch != "" {
 		parts = append(parts, branch)
+	}
+	if speed := m.speed(); speed > 0 {
+		parts = append(parts, formatTokensPerSec(speed))
 	}
 	if mode != string(permission.ModeYolo) {
 		parts = append(parts, "^Y yolo")
 	}
+	parts = append(parts, "^B panel")
 	if !m.followTail && !m.viewport.AtBottom() {
-		parts = append(parts, "↓ scrolled up (End)")
+		parts = append(parts, "↓ scrolled up")
 	}
 	text := m.st.statusSegments(parts...)
 	width := m.contentWidth()
@@ -1329,11 +1389,34 @@ func (m *Model) noteOutputStream(text string) {
 		m.speedStart = time.Now()
 	}
 	m.outputRunes += n
-	elapsed := time.Since(m.speedStart).Seconds()
-	if elapsed < 0.2 {
-		elapsed = 0.2
+	elapsed := time.Since(m.speedStart)
+	// A one-line preamble buffered in a couple of milliseconds is not
+	// meaningful throughput; wait for either 50ms of streaming or a real
+	// chunk of text before showing a number.
+	if elapsed < 50*time.Millisecond && m.outputRunes < 40 {
+		return
 	}
-	m.liveSpeed = float64(m.outputRunes/4) / elapsed
+	seconds := elapsed.Seconds()
+	if seconds < 0.2 {
+		seconds = 0.2
+	}
+	m.liveSpeed = float64(m.outputRunes/4) / seconds
+}
+
+// acceptSpeed filters absurd sub-burst provider values. A tiny buffered
+// preamble can report thousands of tok/s; only keep values that are plausible
+// or backed by enough streamed text/time.
+func (m *Model) acceptSpeed(v float64) bool {
+	if v <= 0 {
+		return false
+	}
+	if v <= 500 {
+		return true
+	}
+	if m.outputRunes >= 40 {
+		return true
+	}
+	return !m.speedStart.IsZero() && time.Since(m.speedStart) >= 50*time.Millisecond
 }
 
 // freezeTextSpeed ends the current text-speed window when a tool starts, so
