@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -1232,5 +1233,258 @@ func TestTokensPerSecUsesOnlyAnswerTextPhase(t *testing.T) {
 	}
 	if endEv.TokensPerSec != res.TokensPerSec {
 		t.Fatalf("turn_end tokens_per_sec = %v, want %v", endEv.TokensPerSec, res.TokensPerSec)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Mid-turn steering
+// ---------------------------------------------------------------------------
+
+// steerTool invokes a callback during execution so tests can queue a steering
+// message while the tool batch is running.
+type steerTool struct {
+	steer func()
+}
+
+func (t steerTool) Name() string                { return "steer_tool" }
+func (t steerTool) Description() string         { return "Queues a steering message during execution." }
+func (t steerTool) Parameters() json.RawMessage { return json.RawMessage(`{"type":"object"}`) }
+func (t steerTool) IsReadOnly() bool            { return true }
+func (t steerTool) IsWeb() bool                 { return false }
+func (t steerTool) IsParallelSafe() bool        { return false }
+func (t steerTool) Execute(context.Context, tools.ExecEnv, json.RawMessage) (tools.Result, error) {
+	if t.steer != nil {
+		t.steer()
+	}
+	return tools.Result{Output: "steer tool done"}, nil
+}
+
+func TestSteerMidTurnAfterTool(t *testing.T) {
+	workDir := t.TempDir()
+	store, err := session.NewStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("session store: %v", err)
+	}
+	sess, err := store.Create(session.SessionMeta{Name: "steer-tool", Model: "deepseek-flash", WorkDir: workDir})
+	if err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+
+	const steerText = "focus only on main.go"
+	p := provider.NewMockProvider()
+	p.QueueSSE(sseFixture(t, "", []sseCall{
+		{id: "call_steer", name: "steer_tool", args: `{}`},
+	}, &provider.Usage{PromptTokens: 10, CompletionTokens: 1, TotalTokens: 11}))
+	p.QueueSSE(sseFixture(t, "Done after steering.", nil, &provider.Usage{PromptTokens: 20, CompletionTokens: 2, TotalTokens: 22}))
+
+	var events []Event
+	a := New(Options{
+		Config:      testConfig(),
+		Provider:    p,
+		Registry:    newRegistry(t),
+		Permissions: yoloPermissions(workDir),
+		Session:     sess,
+		WorkDir:     workDir,
+		OnEvent:     func(ev Event) { events = append(events, ev) },
+	})
+	a.Registry.Register(steerTool{steer: func() {
+		if !a.Steer(steerText) {
+			t.Error("Steer returned false for non-empty text")
+		}
+	}})
+
+	res, err := a.RunTurn(context.Background(), "run the tool", nil)
+	if err != nil {
+		t.Fatalf("RunTurn: %v", err)
+	}
+	if res.StopReason != StopComplete {
+		t.Fatalf("stop reason = %q, want complete", res.StopReason)
+	}
+	if res.Steps != 2 {
+		t.Fatalf("steps = %d, want 2", res.Steps)
+	}
+
+	requests := p.RequestSnapshot()
+	if len(requests) != 2 {
+		t.Fatalf("provider requests = %d, want 2", len(requests))
+	}
+	var steerMsg *provider.Message
+	for i := range requests[1].Messages {
+		msg := requests[1].Messages[i]
+		if msg.Role == provider.RoleUser && msg.Content == steerText {
+			steerMsg = &requests[1].Messages[i]
+		}
+	}
+	if steerMsg == nil {
+		t.Fatalf("next provider request does not include steering message: %+v", requests[1].Messages)
+	}
+	if requests[1].Messages[len(requests[1].Messages)-1].Content != steerText {
+		t.Fatalf("steering message is not the last request message: %+v", requests[1].Messages)
+	}
+
+	var steerEv *Event
+	for i := range events {
+		if events[i].Type == EventSteer {
+			steerEv = &events[i]
+		}
+	}
+	if steerEv == nil {
+		t.Fatalf("missing steer event: %+v", events)
+	}
+	if steerEv.Message != steerText || steerEv.Turn != res.Turn || steerEv.Step == 0 {
+		t.Fatalf("steer event = %+v", steerEv)
+	}
+
+	replay := sess.ReplayMessages()
+	found := false
+	for _, msg := range replay {
+		if msg.Role == provider.RoleUser && msg.Content == steerText {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("steering message was not persisted to the session: %+v", replay)
+	}
+	if got := a.PendingSteers(); got != 0 {
+		t.Fatalf("pending steers = %d, want 0 after drain", got)
+	}
+}
+
+// steerStreamProvider queues a steering message from inside the first stream,
+// after its answer text has been emitted but before the stream closes.
+type steerStreamProvider struct {
+	texts []string
+	calls int
+	steer func()
+}
+
+func (p *steerStreamProvider) ModelInfo(model string) provider.ModelCapabilities {
+	return provider.DefaultModelCapabilities(model)
+}
+
+func (p *steerStreamProvider) Stream(ctx context.Context, _ provider.ChatRequest) (<-chan provider.StreamEvent, error) {
+	if p.calls >= len(p.texts) {
+		return nil, fmt.Errorf("steer provider: no script for call %d", p.calls)
+	}
+	idx := p.calls
+	p.calls++
+
+	out := make(chan provider.StreamEvent, 4)
+	go func() {
+		defer close(out)
+		select {
+		case <-ctx.Done():
+			return
+		case out <- provider.StreamEvent{Type: provider.EventTextDelta, Text: p.texts[idx]}:
+		}
+		if idx == 0 && p.steer != nil {
+			p.steer()
+		}
+		select {
+		case <-ctx.Done():
+		case out <- provider.StreamEvent{Type: provider.EventUsage, Usage: &provider.Usage{
+			PromptTokens: 10, CompletionTokens: 1, TotalTokens: 11,
+		}}:
+		}
+	}()
+	return out, nil
+}
+
+func TestSteerDuringFinalStreamContinuesTurn(t *testing.T) {
+	workDir := t.TempDir()
+	const steerText = "also add a summary"
+	p := &steerStreamProvider{texts: []string{"First answer.", "Summary added."}}
+
+	var events []Event
+	a := New(Options{
+		Config:      testConfig(),
+		Provider:    p,
+		Registry:    newRegistry(t),
+		Permissions: yoloPermissions(workDir),
+		WorkDir:     workDir,
+		OnEvent:     func(ev Event) { events = append(events, ev) },
+	})
+	p.steer = func() {
+		if !a.Steer(steerText) {
+			t.Error("Steer returned false for non-empty text")
+		}
+	}
+
+	res, err := a.RunTurn(context.Background(), "answer this", nil)
+	if err != nil {
+		t.Fatalf("RunTurn: %v", err)
+	}
+	if res.StopReason != StopComplete {
+		t.Fatalf("stop reason = %q, want complete", res.StopReason)
+	}
+	if res.Steps != 2 {
+		t.Fatalf("steps = %d, want 2 (turn should continue for the steer)", res.Steps)
+	}
+	if !strings.Contains(res.Text, "Summary added.") {
+		t.Fatalf("final text = %q, want the follow-up answer", res.Text)
+	}
+	if p.calls != 2 {
+		t.Fatalf("provider calls = %d, want 2", p.calls)
+	}
+	if countEvents(events, EventSteer) != 1 {
+		t.Fatalf("steer events = %d, want 1: %+v", countEvents(events, EventSteer), events)
+	}
+
+	// The follow-up request must carry the steering user message after the
+	// assistant's final answer.
+	history := a.History()
+	assistantIdx, steerIdx := -1, -1
+	for i, msg := range history {
+		if msg.Role == provider.RoleAssistant && strings.Contains(msg.Content, "First answer.") {
+			assistantIdx = i
+		}
+		if msg.Role == provider.RoleUser && msg.Content == steerText {
+			steerIdx = i
+		}
+	}
+	if assistantIdx < 0 || steerIdx < 0 || steerIdx < assistantIdx {
+		t.Fatalf("steer message not appended after the assistant answer: %+v", history)
+	}
+	if got := a.PendingSteers(); got != 0 {
+		t.Fatalf("pending steers = %d, want 0 after drain", got)
+	}
+}
+
+func TestSteerConcurrentCallsAreSafe(t *testing.T) {
+	workDir := t.TempDir()
+	a := New(Options{
+		Config:      testConfig(),
+		Provider:    provider.NewMockProvider(),
+		Registry:    newRegistry(t),
+		Permissions: yoloPermissions(workDir),
+		WorkDir:     workDir,
+	})
+
+	if a.Steer("   ") {
+		t.Fatal("Steer accepted whitespace-only text")
+	}
+	if a.Steer("") {
+		t.Fatal("Steer accepted empty text")
+	}
+
+	const n = 64
+	var wg sync.WaitGroup
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			if !a.Steer(fmt.Sprintf("steer %d", i)) {
+				t.Errorf("Steer returned false for concurrent call %d", i)
+			}
+		}(i)
+	}
+	wg.Wait()
+
+	if got := a.PendingSteers(); got != n {
+		t.Fatalf("pending steers = %d, want %d", got, n)
+	}
+	a.ClearSteers()
+	if got := a.PendingSteers(); got != 0 {
+		t.Fatalf("pending steers after clear = %d, want 0", got)
 	}
 }

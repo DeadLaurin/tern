@@ -15,6 +15,7 @@ const (
 	EventTurnStart      EventType = "turn_start"
 	EventReasoningDelta EventType = "reasoning_delta"
 	EventTextDelta      EventType = "text_delta"
+	EventSteer          EventType = "steer"
 	EventToolStart      EventType = "tool_start"
 	EventToolEnd        EventType = "tool_end"
 	EventUsage          EventType = "usage"

@@ -121,6 +121,11 @@ type Agent struct {
 
 	runMu sync.Mutex
 
+	// steerMu guards pendingSteers so Steer can be called concurrently from
+	// any goroutine while RunTurn holds runMu.
+	steerMu       sync.Mutex
+	pendingSteers []string
+
 	initialized bool
 	history     []provider.Message
 	turn        int
@@ -283,6 +288,7 @@ func (a *Agent) SwitchSession(sess *session.Session) {
 	defer a.runMu.Unlock()
 	a.ensureInit()
 
+	a.clearSteersLocked()
 	a.Session = sess
 	if sess == nil {
 		a.history = nil
@@ -297,6 +303,64 @@ func (a *Agent) SwitchSession(sess *session.Session) {
 	a.totalUsage, a.totalCost = sess.TotalUsage()
 	a.turn = countUserMessages(a.history)
 	a.firstUserSent = a.turn > 0
+}
+
+// Steer queues a mid-turn steering message for the active turn. It trims
+// whitespace, ignores empty text, and is safe to call concurrently from any
+// goroutine while RunTurn is running. The message is injected as an append-only
+// user message once the current tool batch or step finishes.
+func (a *Agent) Steer(text string) bool {
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return false
+	}
+	a.steerMu.Lock()
+	a.pendingSteers = append(a.pendingSteers, text)
+	a.steerMu.Unlock()
+	return true
+}
+
+// PendingSteers reports how many steering messages are waiting to be drained.
+func (a *Agent) PendingSteers() int {
+	a.steerMu.Lock()
+	defer a.steerMu.Unlock()
+	return len(a.pendingSteers)
+}
+
+// ClearSteers drops any queued steering messages without injecting them.
+func (a *Agent) ClearSteers() {
+	a.steerMu.Lock()
+	a.pendingSteers = nil
+	a.steerMu.Unlock()
+}
+
+func (a *Agent) clearSteersLocked() {
+	a.steerMu.Lock()
+	a.pendingSteers = nil
+	a.steerMu.Unlock()
+}
+
+// drainSteers atomically pops all pending steering messages and appends them to
+// the transcript as one user message. History stays append-only so the cached
+// request prefix before it is untouched. It reports whether anything was
+// drained.
+func (a *Agent) drainSteers(turn, step int) bool {
+	a.steerMu.Lock()
+	if len(a.pendingSteers) == 0 {
+		a.steerMu.Unlock()
+		return false
+	}
+	steers := a.pendingSteers
+	a.pendingSteers = nil
+	a.steerMu.Unlock()
+
+	combined := strings.Join(steers, "\n\n")
+	if err := a.appendMessage(provider.Message{Role: provider.RoleUser, Content: combined}, false); err != nil {
+		a.emit(Event{Type: EventError, Turn: turn, Step: step, Message: err.Error()})
+		return false
+	}
+	a.emit(Event{Type: EventSteer, Turn: turn, Step: step, Message: combined})
+	return true
 }
 
 // RunTurn runs one full user turn: append the user message, stream model
@@ -412,11 +476,21 @@ func (a *Agent) RunTurn(ctx context.Context, userInput string, attachments []pro
 		}
 
 		if len(sr.ToolCalls) == 0 {
+			// A steer that arrived while the final answer streamed in keeps
+			// the turn going so the model can respond to it immediately.
+			budgetExceeded := a.Config.MaxCostUSD > 0 && a.totalCost >= a.Config.MaxCostUSD
+			if a.drainSteers(turn, steps) && steps < maxSteps && ctx.Err() == nil && !budgetExceeded {
+				continue
+			}
 			res.Compacted = compacted
 			return a.finishTurn(res, turn, startUsage, startCost, StopComplete, nil)
 		}
 
 		a.runToolBatch(ctx, turn, steps, sr.ToolCalls)
+
+		// Steering messages queued during the tool batch are injected before
+		// the next provider request.
+		a.drainSteers(turn, steps)
 
 		// Auto compaction is checked after the tool batch, before the next
 		// model request.
