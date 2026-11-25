@@ -1,0 +1,6 @@
+▸ explore · "Find where auth tokens are validated"  ⚠ approval · 12s
+  ├ grep "validateToken"                done
+  ├ read internal/auth/token.go         done
+  ├ read internal/auth/middleware.go    running…
+  └ bash approval required              waiting…
+  3 steps · 10.4k tok · cache 82% · $0.002
