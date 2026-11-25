@@ -285,6 +285,9 @@ func (m *Model) handleAskKey(msg tea.KeyMsg) tea.Cmd {
 	case tea.KeyRunes:
 		state.input = append(state.input, msg.Runes...)
 		return nil
+	case tea.KeySpace:
+		state.input = append(state.input, ' ')
+		return nil
 	}
 	return nil
 }

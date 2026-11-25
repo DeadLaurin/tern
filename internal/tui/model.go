@@ -118,6 +118,13 @@ type Model struct {
 	spinnerFrame int
 	usingTools   bool
 
+	// Live output throughput. Numeric deltas drive an estimate until the
+	// provider reports an exact tokens_per_sec value.
+	outputRunes int
+	speedStart  time.Time
+	liveSpeed   float64
+	lastSpeed   float64
+
 	usage        provider.Usage
 	totalCost    float64
 	cache        float64
@@ -140,6 +147,11 @@ type Model struct {
 	content    string
 	lastWidth  int
 	followTail bool
+
+	// Modal state. activeModal is the enum the key router and view use;
+	// modal carries the selected rows, filters and transient prompts.
+	activeModal modalKind
+	modal       modalState
 }
 
 // Init starts the UI ticker.
@@ -168,16 +180,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 		if m.running {
-			frame := spinnerFrames[m.spinnerFrame%len(spinnerFrames)]
-			if m.st.plain {
-				frame = "*"
-			}
-			elapsed := formatDuration(time.Since(m.turnStart))
-			if m.usingTools {
-				m.statusMsg = frame + " Running tools… " + elapsed
-			} else {
-				m.statusMsg = frame + " Thinking… " + elapsed
-			}
+			m.statusMsg = m.runningStatus()
 		}
 		if m.running || m.activeAgentCount() > 0 {
 			m.dirty = true
@@ -261,6 +264,9 @@ func (m *Model) handleKey(msg tea.KeyMsg) tea.Cmd {
 	if m.agentsPanel {
 		return m.handleAgentsPanelKey(msg)
 	}
+	if m.activeModal != modalNone {
+		return m.handleModalKey(msg)
+	}
 
 	if msg.Type == tea.KeyCtrlC {
 		return m.handleCtrlC()
@@ -315,6 +321,10 @@ func (m *Model) handleKey(msg tea.KeyMsg) tea.Cmd {
 	if msg.Type == tea.KeyCtrlG {
 		return m.openExternalEditor()
 	}
+	if msg.Type == tea.KeyCtrlP {
+		m.openModelModal()
+		return nil
+	}
 
 	return m.handleEditorKey(msg)
 }
@@ -336,6 +346,9 @@ func (m *Model) handleEditorKey(msg tea.KeyMsg) tea.Cmd {
 			return nil
 		case tea.KeyRunes:
 			m.ed.UpdateSearch(string(msg.Runes))
+			return nil
+		case tea.KeySpace:
+			m.ed.UpdateSearch(" ")
 			return nil
 		default:
 			return nil
@@ -359,6 +372,8 @@ func (m *Model) handleEditorKey(msg tea.KeyMsg) tea.Cmd {
 		return nil
 	case tea.KeyRunes:
 		m.ed.InsertRunes(string(msg.Runes))
+	case tea.KeySpace:
+		m.ed.InsertRunes(" ")
 	case tea.KeyBackspace:
 		m.ed.Backspace()
 	case tea.KeyDelete:
@@ -456,6 +471,9 @@ func (m *Model) startTurn(text string, attachments []provider.ContentPart) tea.C
 	m.usingTools = false
 	m.followTail = true
 	m.quitArmed = false
+	m.outputRunes = 0
+	m.speedStart = time.Time{}
+	m.liveSpeed = 0
 	m.statusMsg = "Thinking…"
 	m.ctxTokens += len(text) / 4
 
@@ -486,6 +504,10 @@ func (m *Model) handleTurnDone(msg turnDoneMsg) {
 		m.cache = msg.result.CacheHitRate
 		if msg.result.Usage.PromptTokens > 0 {
 			m.ctxTokens = msg.result.Usage.PromptTokens
+		}
+		if msg.result.TokensPerSec > 0 {
+			m.liveSpeed = msg.result.TokensPerSec
+			m.lastSpeed = msg.result.TokensPerSec
 		}
 	}
 	if msg.err != nil {
@@ -520,10 +542,12 @@ func (m *Model) handleAgentEvent(ev agent.Event) {
 	case agent.EventReasoningDelta:
 		m.pendingReasoning += ev.Text
 		m.ctxTokens += len(ev.Text) / 4
+		m.noteOutputStream(ev.Text)
 
 	case agent.EventTextDelta:
 		m.pendingText += ev.Text
 		m.ctxTokens += len(ev.Text) / 4
+		m.noteOutputStream(ev.Text)
 
 	case agent.EventToolStart:
 		m.flushPending()
@@ -583,6 +607,10 @@ func (m *Model) handleAgentEvent(ev agent.Event) {
 		if ev.CacheHitRate > 0 {
 			m.cache = ev.CacheHitRate
 		}
+		if ev.TokensPerSec > 0 {
+			m.liveSpeed = ev.TokensPerSec
+			m.lastSpeed = ev.TokensPerSec
+		}
 
 	case agent.EventTurnEnd:
 		m.flushPending()
@@ -593,6 +621,10 @@ func (m *Model) handleAgentEvent(ev agent.Event) {
 		}
 		if ev.CacheHitRate > 0 {
 			m.cache = ev.CacheHitRate
+		}
+		if ev.TokensPerSec > 0 {
+			m.liveSpeed = ev.TokensPerSec
+			m.lastSpeed = ev.TokensPerSec
 		}
 		m.curAssistant = nil
 		m.curReasoning = nil
@@ -767,16 +799,7 @@ func (m *Model) View() string {
 		m.height = 30
 	}
 	if m.running && m.pendingApproval == nil && m.pendingAsk == nil {
-		frame := spinnerFrames[m.spinnerFrame%len(spinnerFrames)]
-		if m.st.plain {
-			frame = "*"
-		}
-		elapsed := formatDuration(time.Since(m.turnStart))
-		if m.usingTools {
-			m.statusMsg = frame + " Running tools… " + elapsed
-		} else {
-			m.statusMsg = frame + " Thinking… " + elapsed
-		}
+		m.statusMsg = m.runningStatus()
 	}
 	m.flushPending()
 	m.rebuildContent()
@@ -794,6 +817,8 @@ func (m *Model) View() string {
 		mainView = m.askView()
 	case m.agentsPanel:
 		mainView = m.agentsPanelView()
+	case m.activeModal != modalNone:
+		mainView = m.modalView()
 	default:
 		mainView = ""
 	}
@@ -847,7 +872,8 @@ func asciiOnly(s string) string {
 		"▸", ">", "❯", ">", "│", "|", "├", "|", "└", "`",
 		"·", "|", "…", "...", "▌", "|", "─", "-", "⠋", "*",
 		"✓", "[ok]", "✗", "[x]", "⚠", "!", "⊘", "[-]", "◐", "[~]",
-		"○", "[ ]", "→", "->", "↑", "^", "↓", "v",
+		"○", "[ ]", "→", "->", "↑", "^", "↓", "v", "←", "<",
+		"┃", "|", "●", "*", "┌", "+", "┐", "+", "┘", "+",
 	)
 	return replacer.Replace(s)
 }
@@ -896,13 +922,48 @@ func (m *Model) renderWelcome() string {
 	if version == "" {
 		version = "dev"
 	}
+	model := "unknown"
+	effort := ""
+	if m.opts.Config != nil {
+		model = m.opts.Config.Model
+		effort = strings.TrimSpace(m.opts.Config.ReasoningEffort)
+	}
+	modelLabel := model
+	if effort != "" {
+		modelLabel += " (" + effort + ")"
+	}
+	cwd := m.opts.WorkDir
+	if cwd == "" {
+		cwd = "."
+	}
+	branch := strings.TrimSpace(m.opts.GitBranch)
+	if branch == "" {
+		branch = "no-branch"
+	}
+	sep := "  ·  "
+	dim := func(text string) string { return m.st.paint(m.st.dim, text) }
+	key := func(text string) string { return m.st.paint(m.st.info, text) }
 	lines := []string{
-		m.st.paint(m.st.heading, "tern "+version),
-		m.st.paint(m.st.dim, "An interactive coding agent."),
+		m.st.paint(m.st.heading, "tern") + dim("  "+version),
+		dim("An interactive coding agent."),
 		"",
-		m.st.paint(m.st.info, "/help") + m.st.paint(m.st.dim, " commands  ·  ") +
-			m.st.paint(m.st.info, "@file") + m.st.paint(m.st.dim, " attach files  ·  ") +
-			m.st.paint(m.st.info, "Ctrl+T") + m.st.paint(m.st.dim, " reasoning/tools"),
+		dim("model   ") + m.st.paint(m.st.accent, modelLabel),
+		dim("cwd     ") + m.st.paint(m.st.teal, cwd),
+		dim("branch  ") + m.st.paint(m.st.sage, branch),
+		"",
+		key("/model") + dim(" or ") + key("Ctrl+P") + dim(" switch model") + sep +
+			key("/sessions") + dim(" resume") + sep + key("/stats") + dim(" usage"),
+		key("/skills") + dim(" inspect") + sep + key("/mcp") + dim(" servers") + sep +
+			key("/help") + dim(" all commands"),
+	}
+	if !m.st.plain {
+		bar := m.st.paint(m.st.userAccent, "┃")
+		for i, line := range lines {
+			if i == 0 {
+				continue
+			}
+			lines[i] = bar + " " + line
+		}
 	}
 	return strings.Join(lines, "\n")
 }
@@ -915,7 +976,8 @@ func (m *Model) renderEntry(entry *transcriptEntry) string {
 		if m.st.plain {
 			marker = "> "
 		}
-		return m.st.paint(m.st.user, marker) + m.st.paint(m.st.user, wrapPlainCell(entry.text, width-2))
+		body := m.st.paint(m.st.userAccent, "┃ ") + m.st.paint(m.st.user, wrapPlainCell(entry.text, width-4))
+		return m.st.paint(m.st.user, marker) + body
 
 	case entryAssistant:
 		return RenderMarkdown(entry.text, width, m.st.plain)
@@ -1032,8 +1094,14 @@ func (m *Model) todoView() string {
 
 func (m *Model) statusView() string {
 	modelName := "unknown"
+	effort := ""
 	if m.opts.Config != nil {
 		modelName = m.opts.Config.Model
+		effort = strings.TrimSpace(m.opts.Config.ReasoningEffort)
+	}
+	modelLabel := modelName
+	if effort != "" {
+		modelLabel += " (" + effort + ")"
 	}
 	mode := "ask"
 	if m.opts.Agent != nil && m.opts.Agent.Permissions != nil {
@@ -1054,11 +1122,11 @@ func (m *Model) statusView() string {
 		branch = "no-branch"
 	}
 	text := m.st.statusSegments(
-		modelName,
+		modelLabel,
 		mode,
+		formatTokensPerSec(m.speed()),
 		fmt.Sprintf("ctx %d%%", ctxPct),
 		fmt.Sprintf("cache %d%%", cachePct),
-		fmt.Sprintf("%d agents", m.activeAgentCount()),
 		fmt.Sprintf("$%.3f", m.totalCost),
 		branch,
 	)
@@ -1070,6 +1138,65 @@ func (m *Model) statusView() string {
 		text += strings.Repeat(" ", pad)
 	}
 	return m.st.statusBar.Render(text)
+}
+
+// speed returns the most useful throughput number for display: the live
+// estimate while streaming, otherwise the last exact value.
+func (m *Model) speed() float64 {
+	if m.running && m.liveSpeed > 0 {
+		return m.liveSpeed
+	}
+	if m.liveSpeed > 0 {
+		return m.liveSpeed
+	}
+	return m.lastSpeed
+}
+
+func formatTokensPerSec(v float64) string {
+	if v < 0 {
+		v = 0
+	}
+	if v >= 100 {
+		return fmt.Sprintf("%.0f tok/s", v)
+	}
+	if v >= 10 {
+		return fmt.Sprintf("%.0f tok/s", v)
+	}
+	return fmt.Sprintf("%.1f tok/s", v)
+}
+
+// noteOutputStream estimates throughput from streamed deltas. The estimate is
+// replaced by the provider's exact value when usage/turn-end events arrive.
+func (m *Model) noteOutputStream(text string) {
+	n := len([]rune(text))
+	if n == 0 {
+		return
+	}
+	if m.speedStart.IsZero() {
+		m.speedStart = time.Now()
+	}
+	m.outputRunes += n
+	elapsed := time.Since(m.speedStart).Seconds()
+	if elapsed < 0.2 {
+		elapsed = 0.2
+	}
+	m.liveSpeed = float64(m.outputRunes/4) / elapsed
+}
+
+func (m *Model) runningStatus() string {
+	frame := spinnerFrames[m.spinnerFrame%len(spinnerFrames)]
+	if m.st.plain {
+		frame = "*"
+	}
+	elapsed := formatDuration(time.Since(m.turnStart))
+	speed := ""
+	if m.liveSpeed > 0 {
+		speed = " · " + formatTokensPerSec(m.liveSpeed)
+	}
+	if m.usingTools {
+		return frame + " Running tools… " + elapsed + speed
+	}
+	return frame + " Thinking… " + elapsed + speed
 }
 
 func (m *Model) activeAgentCount() int {

@@ -39,6 +39,7 @@ var builtinCommandNames = []string{
 	"rewind",
 	"sessions",
 	"skills",
+	"stats",
 	"undo",
 }
 
@@ -118,7 +119,11 @@ func (m *Model) handleSlash(line string, attachments []provider.ContentPart) tea
 		return m.cmdSkills(args)
 
 	case "mcp":
-		m.addInfo(m.mcpText())
+		m.openMCPModal()
+		return nil
+
+	case "stats":
+		m.openStatsModal()
 		return nil
 
 	case "config":
@@ -186,7 +191,8 @@ func (m *Model) helpText() string {
 	b.WriteString("Slash commands:\n")
 	help := map[string]string{
 		"/help":                    "show this help",
-		"/model [name]":            "show or change the model",
+		"/model [name]":            "open the model selector or switch directly",
+		"/stats":                   "usage and activity log across sessions",
 		"/plan":                    "toggle read-only plan mode",
 		"/compact [text]":          "summarize older context (optional instructions)",
 		"/cost":                    "show token usage and estimated cost",
@@ -195,12 +201,12 @@ func (m *Model) helpText() string {
 		"/clear":                   "clear the transcript view",
 		"/undo":                    "restore files from the latest checkpoint",
 		"/rewind [turn]":           "list turns or restore the state before a turn",
-		"/sessions [query]":        "list recent sessions",
+		"/sessions [query]":        "browse, resume, fork, rename or delete sessions",
 		"/fork [name]":             "fork the current session transcript",
 		"/name <name>":             "rename the current session",
 		"/export [md|html] [path]": "export the session transcript",
-		"/skills [name]":           "list skills or show one skill",
-		"/mcp":                     "show MCP server status",
+		"/skills [name]":           "browse skills or show one directly",
+		"/mcp":                     "MCP servers, tools and reconnect",
 		"/config":                  "show the effective configuration",
 		"/quit":                    "exit tern",
 	}
@@ -228,38 +234,11 @@ func (m *Model) helpText() string {
 
 func (m *Model) cmdModel(args string) tea.Cmd {
 	if strings.TrimSpace(args) == "" {
-		names := make([]string, 0, len(m.opts.Config.Pricing))
-		for name := range m.opts.Config.Pricing {
-			names = append(names, name)
-		}
-		sort.Strings(names)
-		current := m.opts.Config.Model
-		var b strings.Builder
-		fmt.Fprintf(&b, "Current model: %s\n", current)
-		b.WriteString("Available models:\n")
-		for _, name := range names {
-			marker := "  "
-			if name == current {
-				marker = "* "
-			}
-			fmt.Fprintf(&b, "  %s%s\n", marker, name)
-		}
-		m.addInfo(strings.TrimRight(b.String(), "\n"))
+		m.openModelModal()
 		return nil
 	}
 	name := strings.TrimSpace(strings.Fields(args)[0])
-	m.opts.Config.Model = name
-	if m.opts.Agent != nil {
-		if m.opts.Agent.Config == nil {
-			m.opts.Agent.Config = m.opts.Config
-		}
-		m.opts.Agent.Config.Model = name
-		if m.opts.Agent.Provider != nil {
-			if caps := m.opts.Agent.Provider.ModelInfo(name); caps.ContextWindow > 0 {
-				m.ctxWindow = caps.ContextWindow
-			}
-		}
-	}
+	m.applyModel(name)
 	m.addInfo("Model set to " + name + ".")
 	return nil
 }
@@ -425,34 +404,7 @@ func formatRestore(prefix string, result *checkpoint.RestoreResult) string {
 }
 
 func (m *Model) cmdSessions(query string) tea.Cmd {
-	if m.opts.SessionStore == nil {
-		m.addError("Session storage is not configured.")
-		return nil
-	}
-	list, err := m.opts.SessionStore.List(query)
-	if err != nil {
-		m.addError("sessions: " + err.Error())
-		return nil
-	}
-	if len(list) == 0 {
-		m.addInfo("No sessions found.")
-		return nil
-	}
-	var b strings.Builder
-	b.WriteString("Recent sessions:\n")
-	for i, item := range list {
-		if i >= 20 {
-			fmt.Fprintf(&b, "  … %d more\n", len(list)-i)
-			break
-		}
-		name := item.Name
-		if name == "" {
-			name = item.ID
-		}
-		fmt.Fprintf(&b, "  %-28s %-20s %d msgs  $%.3f  %s\n",
-			truncateCell(name, 28), item.ID, item.MessageCount, item.CostUSD, item.UpdatedAt.Local().Format("2006-01-02 15:04"))
-	}
-	m.addInfo(strings.TrimRight(b.String(), "\n"))
+	m.openSessionsModal(query)
 	return nil
 }
 
@@ -545,21 +497,7 @@ func (m *Model) cmdExport(args string) tea.Cmd {
 func (m *Model) cmdSkills(args string) tea.Cmd {
 	name := strings.TrimSpace(args)
 	if name == "" {
-		skills, err := terncontext.ListSkills(m.opts.WorkDir, m.opts.GlobalConfigDir)
-		if err != nil {
-			m.addError("skills: " + err.Error())
-			return nil
-		}
-		if len(skills) == 0 {
-			m.addInfo("No skills found. Add markdown files under .tern/skills.")
-			return nil
-		}
-		var b strings.Builder
-		b.WriteString("Skills:\n")
-		for _, skill := range skills {
-			fmt.Fprintf(&b, "  %-24s %s\n", skill.Name, skill.Description)
-		}
-		m.addInfo(strings.TrimRight(b.String(), "\n"))
+		m.openSkillsModal()
 		return nil
 	}
 	skill, err := terncontext.LoadSkill(m.opts.WorkDir, m.opts.GlobalConfigDir, name)

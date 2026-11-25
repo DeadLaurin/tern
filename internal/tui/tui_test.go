@@ -12,7 +12,10 @@ import (
 
 	"github.com/tern-agent/tern/internal/agent"
 	"github.com/tern-agent/tern/internal/config"
+	"github.com/tern-agent/tern/internal/ext"
 	"github.com/tern-agent/tern/internal/permission"
+	"github.com/tern-agent/tern/internal/provider"
+	"github.com/tern-agent/tern/internal/session"
 	"github.com/tern-agent/tern/internal/subagent"
 )
 
@@ -487,7 +490,7 @@ func TestCustomSlashCommandDispatch(t *testing.T) {
 func TestStatusBarFormat(t *testing.T) {
 	m := newTestModel(t, Options{GitBranch: "main"})
 	view := m.View()
-	want := "deepseek-flash | ask | ctx 0% | cache 0% | 0 agents | $0.000 | main"
+	want := "deepseek-flash (high) | ask | 0.0 tok/s | ctx 0% | cache 0% | $0.000 | main"
 	if !strings.Contains(view, want) {
 		t.Fatalf("status bar missing %q:\n%s", want, view)
 	}
@@ -541,5 +544,426 @@ func TestReverseHistorySearch(t *testing.T) {
 	}
 	if got := m.ed.Value(); got != "/model" {
 		t.Fatalf("accepted search value = %q, want /model", got)
+	}
+}
+
+// typeWithSpace types text using tea.KeySpace for spaces, mirroring Bubble Tea
+// v1's key encoding for the physical spacebar.
+func typeWithSpace(t *testing.T, m *Model, text string) {
+	t.Helper()
+	for _, r := range text {
+		if r == ' ' {
+			m.Update(tea.KeyMsg{Type: tea.KeySpace})
+			continue
+		}
+		m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+	}
+}
+
+func TestSpacebarInEditorAndHistorySearch(t *testing.T) {
+	m := newTestModel(t, Options{})
+	typeWithSpace(t, m, "hello world")
+	if got := m.ed.Value(); got != "hello world" {
+		t.Fatalf("editor value = %q, want %q", got, "hello world")
+	}
+
+	m.ed.Reset()
+	m.ed.AddHistory("deploy staging now")
+	m.Update(tea.KeyMsg{Type: tea.KeyCtrlR})
+	typeWithSpace(t, m, "staging now")
+	if got := m.ed.SearchQuery(); got != "staging now" {
+		t.Fatalf("search query = %q, want %q", got, "staging now")
+	}
+	m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if got := m.ed.Value(); got != "deploy staging now" {
+		t.Fatalf("accepted search value = %q", got)
+	}
+}
+
+func TestSpacebarInAskPrompt(t *testing.T) {
+	m := newTestModel(t, Options{})
+	response := make(chan string, 1)
+	m.Update(askUserMsg{request: &askState{question: "Name?", response: response}})
+	typeWithSpace(t, m, "hello world")
+	m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	select {
+	case got := <-response:
+		if got != "hello world" {
+			t.Fatalf("ask answer = %q, want %q", got, "hello world")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("ask response not delivered")
+	}
+}
+
+func TestSpacebarInSessionFilter(t *testing.T) {
+	store, dir := newSessionStore(t)
+	m := newTestModel(t, Options{SessionStore: store, WorkDir: dir})
+	submitText(t, m, "/sessions")
+	if m.activeModal != modalSessions {
+		t.Fatal("/sessions did not open the session modal")
+	}
+	typeWithSpace(t, m, "my session")
+	if got := m.modal.filter; got != "my session" {
+		t.Fatalf("session filter = %q, want %q", got, "my session")
+	}
+	if !strings.Contains(m.View(), "my session") {
+		t.Fatalf("filter not rendered:\n%s", m.View())
+	}
+}
+
+func TestLiveTokensPerSecondIndicator(t *testing.T) {
+	m := newTestModel(t, Options{})
+	m.running = true
+	m.turnStart = time.Now().Add(-2 * time.Second)
+	m.speedStart = time.Now().Add(-2 * time.Second)
+	m.Update(agentEventMsg{event: agent.Event{Type: agent.EventTextDelta, Text: strings.Repeat("word ", 200)}})
+	m.spinnerFrame = 0
+	view := m.View()
+	if !strings.Contains(view, "tok/s") {
+		t.Fatalf("live view missing tok/s indicator:\n%s", view)
+	}
+	if m.liveSpeed <= 0 {
+		t.Fatalf("liveSpeed = %v, want > 0", m.liveSpeed)
+	}
+	m.Update(agentEventMsg{event: agent.Event{Type: agent.EventTurnEnd, TokensPerSec: 54}})
+	if !strings.Contains(m.View(), "54 tok/s") {
+		t.Fatalf("status bar missing exact tok/s value:\n%s", m.View())
+	}
+}
+
+func TestModelSelectorChangesModelAndEffort(t *testing.T) {
+	m := newTestModel(t, Options{})
+	m.opts.Config.ReasoningEffort = "high"
+	submitText(t, m, "/model")
+	if m.activeModal != modalModel {
+		t.Fatal("/model did not open the model selector")
+	}
+	view := m.View()
+	for _, want := range []string{"Current model", "deepseek-flash", "deepseek-v4-pro", "1M", "vision", "off", "peak"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("model selector missing %q:\n%s", want, view)
+		}
+	}
+	press(t, m, tea.KeyDown)
+	press(t, m, tea.KeyRight)
+	press(t, m, tea.KeyEnter)
+	if m.activeModal != modalNone {
+		t.Fatal("enter did not close the model selector")
+	}
+	if got := m.opts.Config.Model; got != "deepseek-v4-pro" {
+		t.Fatalf("config model = %q, want deepseek-v4-pro", got)
+	}
+	if got := m.opts.Agent.Config.Model; got != "deepseek-v4-pro" {
+		t.Fatalf("agent model = %q, want deepseek-v4-pro", got)
+	}
+	if got := m.opts.Config.ReasoningEffort; got != "max" {
+		t.Fatalf("config effort = %q, want max", got)
+	}
+	if got := m.opts.Agent.ReasoningEffort(); got != "max" {
+		t.Fatalf("agent effort = %q, want max", got)
+	}
+}
+
+func TestModelShortcutStillWorks(t *testing.T) {
+	m := newTestModel(t, Options{})
+	submitText(t, m, "/model deepseek-v4-pro")
+	if got := m.opts.Config.Model; got != "deepseek-v4-pro" {
+		t.Fatalf("model = %q", got)
+	}
+	if m.activeModal != modalNone {
+		t.Fatal("direct /model shortcut should not open the selector")
+	}
+}
+
+func TestCtrlPOpensModelSelector(t *testing.T) {
+	m := newTestModel(t, Options{})
+	press(t, m, tea.KeyCtrlP)
+	if m.activeModal != modalModel {
+		t.Fatal("Ctrl+P did not open the model selector")
+	}
+	press(t, m, tea.KeyEsc)
+	if m.activeModal != modalNone {
+		t.Fatal("Esc did not close the model selector")
+	}
+}
+
+func newSessionStore(t *testing.T) (*session.Store, string) {
+	t.Helper()
+	dir := t.TempDir()
+	store, err := session.NewStore(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return store, dir
+}
+
+func TestSessionsModalSwitchAndCreate(t *testing.T) {
+	store, dir := newSessionStore(t)
+	first, err := store.Create(session.SessionMeta{Name: "first session", Model: "deepseek-flash", WorkDir: dir})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := first.AppendMessage(providerMessage("user", "hello from first")); err != nil {
+		t.Fatal(err)
+	}
+	if err := first.AppendMessage(providerMessage("assistant", "first reply")); err != nil {
+		t.Fatal(err)
+	}
+
+	m := newTestModel(t, Options{SessionStore: store, WorkDir: dir})
+	submitText(t, m, "/sessions")
+	if m.activeModal != modalSessions {
+		t.Fatal("/sessions did not open the session manager")
+	}
+	view := m.View()
+	if !strings.Contains(view, "first session") || !strings.Contains(view, "Sessions") {
+		t.Fatalf("session manager missing content:\n%s", view)
+	}
+	press(t, m, tea.KeyEnter)
+	if m.opts.Session == nil || m.opts.Session.ID() != first.ID() {
+		t.Fatalf("active session = %v, want %s", m.opts.Session, first.ID())
+	}
+	if m.activeModal != modalNone {
+		t.Fatal("opening a session did not close the modal")
+	}
+	if !strings.Contains(m.View(), "hello from first") || !strings.Contains(m.View(), "first reply") {
+		t.Fatalf("transcript was not rebuilt from replay:\n%s", m.View())
+	}
+
+	submitText(t, m, "/sessions")
+	pressRune(t, m, "n")
+	if m.opts.Session == nil || m.opts.Session.ID() == first.ID() {
+		t.Fatal("n did not create and switch to a fresh session")
+	}
+	for _, entry := range m.entries {
+		if entry.kind == entryUser {
+			t.Fatalf("fresh session transcript contains a user message: %+v", entry)
+		}
+	}
+}
+
+func TestSessionsModalRenameForkDeleteAndFilter(t *testing.T) {
+	store, dir := newSessionStore(t)
+	first, err := store.Create(session.SessionMeta{Name: "alpha session", Model: "deepseek-flash", WorkDir: dir})
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := newTestModel(t, Options{SessionStore: store, WorkDir: dir})
+	submitText(t, m, "/sessions")
+
+	// Filter includes a space via the spacebar.
+	typeWithSpace(t, m, "alpha")
+	if got := m.modal.filter; got != "alpha" {
+		t.Fatalf("filter = %q", got)
+	}
+	// Clear the filter and rename the selected session.
+	for range []rune("alpha") {
+		press(t, m, tea.KeyBackspace)
+	}
+	pressRune(t, m, "r")
+	typeWithSpace(t, m, "renamed session")
+	press(t, m, tea.KeyEnter)
+	opened, err := store.Open(first.ID())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := opened.Name(); got != "renamed session" {
+		t.Fatalf("renamed session = %q", got)
+	}
+
+	// Fork the selected session and switch to the fork. The rename flow keeps
+	// the manager open, so no extra /sessions is needed.
+	pressRune(t, m, "f")
+	if m.opts.Session == nil || m.opts.Session.ID() == first.ID() {
+		t.Fatal("f did not switch to the fork")
+	}
+	forkID := m.opts.Session.ID()
+
+	// A non-active session can be deleted after confirmation.
+	submitText(t, m, "/sessions")
+	typeWithSpace(t, m, "/renamed")
+	if len(m.filteredSessions()) < 2 {
+		t.Fatalf("expected parent and fork in filter, got %d", len(m.filteredSessions()))
+	}
+	for range []rune("renamed") {
+		press(t, m, tea.KeyBackspace)
+	}
+	// Select the row that is not active.
+	for _, item := range m.filteredSessions() {
+		if item.ID != forkID {
+			m.modal.index = indexOfSession(m.filteredSessions(), item.ID)
+			break
+		}
+	}
+	pressRune(t, m, "d")
+	if !m.modal.confirmDelete {
+		t.Fatal("d did not arm delete confirmation")
+	}
+	pressRune(t, m, "y")
+	if _, err := store.Open(first.ID()); err == nil {
+		t.Fatal("session still exists after confirmed delete")
+	}
+}
+
+func TestSessionsModalPreventsDeletingActiveSession(t *testing.T) {
+	store, dir := newSessionStore(t)
+	sess, err := store.Create(session.SessionMeta{Name: "active", Model: "deepseek-flash", WorkDir: dir})
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := newTestModel(t, Options{SessionStore: store, Session: sess, WorkDir: dir})
+	submitText(t, m, "/sessions")
+	pressRune(t, m, "d")
+	if m.modal.confirmDelete {
+		t.Fatal("active session should not be armed for deletion")
+	}
+	if !strings.Contains(m.View(), "Cannot delete the active session") {
+		t.Fatalf("missing active-session protection notice:\n%s", m.View())
+	}
+}
+
+func TestStatsModalRenderingAndResume(t *testing.T) {
+	store, dir := newSessionStore(t)
+	sess, err := store.Create(session.SessionMeta{Name: "stats session", Model: "deepseek-flash", WorkDir: dir})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := sess.AppendMessage(providerMessage("user", "measure me")); err != nil {
+		t.Fatal(err)
+	}
+	if err := sess.AppendUsage(sessionUsage(1000, 500, 200, 100), 0.002, ""); err != nil {
+		t.Fatal(err)
+	}
+	m := newTestModel(t, Options{SessionStore: store, WorkDir: dir})
+	submitText(t, m, "/stats")
+	if m.activeModal != modalStats {
+		t.Fatal("/stats did not open the usage modal")
+	}
+	view := m.View()
+	for _, want := range []string{"Usage & activity", "Lifetime", "Token", "Cache hit", "Session log", "stats session"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("stats view missing %q:\n%s", want, view)
+		}
+	}
+	press(t, m, tea.KeyEnter)
+	if m.opts.Session == nil || m.opts.Session.ID() != sess.ID() {
+		t.Fatal("enter in stats did not resume the selected session")
+	}
+}
+
+func TestSkillsPanelAndTemplateCreation(t *testing.T) {
+	dir := t.TempDir()
+	global := t.TempDir()
+	skillDir := filepath.Join(dir, ".tern", "skills")
+	if err := os.MkdirAll(skillDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	skillPath := filepath.Join(skillDir, "review.md")
+	if err := os.WriteFile(skillPath, []byte("---\nname: review\ndescription: Review code carefully\n---\n\nCheck edge cases.\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	m := newTestModel(t, Options{WorkDir: dir, GlobalConfigDir: global})
+	submitText(t, m, "/skills")
+	if m.activeModal != modalSkills {
+		t.Fatal("/skills did not open the skills panel")
+	}
+	view := m.View()
+	if !strings.Contains(view, "review") || !strings.Contains(view, "Check edge cases") || !strings.Contains(view, ".tern/skills") {
+		t.Fatalf("skills panel missing content:\n%s", view)
+	}
+	press(t, m, tea.KeyEnter)
+	if m.activeModal != modalNone {
+		t.Fatal("enter did not close the skills panel")
+	}
+	if got := m.ed.Value(); !strings.Contains(got, "Check edge cases") {
+		t.Fatalf("skill body not loaded into editor: %q", got)
+	}
+
+	m.ed.Reset()
+	submitText(t, m, "/skills")
+	pressRune(t, m, "c")
+	example := filepath.Join(skillDir, "example.md")
+	if _, err := os.Stat(example); err != nil {
+		t.Fatalf("starter skill not created: %v", err)
+	}
+}
+
+func TestMCPPanelEmptyAndConfigured(t *testing.T) {
+	t.Run("empty", func(t *testing.T) {
+		m := newTestModel(t, Options{})
+		submitText(t, m, "/mcp")
+		if m.activeModal != modalMCP {
+			t.Fatal("/mcp did not open the MCP panel")
+		}
+		view := m.View()
+		for _, want := range []string{"No MCP servers configured", "[[servers]]", "mcp.toml", ".tern/mcp.toml"} {
+			if !strings.Contains(view, want) {
+				t.Fatalf("empty MCP view missing %q:\n%s", want, view)
+			}
+		}
+	})
+
+	t.Run("configured", func(t *testing.T) {
+		manager := ext.NewManager(ext.ServerConfig{Name: "files", Transport: ext.TransportStdio, Command: "true"})
+		m := newTestModel(t, Options{MCP: manager})
+		submitText(t, m, "/mcp")
+		view := m.View()
+		if !strings.Contains(view, "files") || !strings.Contains(view, "stdio") {
+			t.Fatalf("configured MCP view missing server:\n%s", view)
+		}
+	})
+}
+
+func TestNoColorModalOutputIsANSIAndUnicodeFree(t *testing.T) {
+	t.Setenv("NO_COLOR", "1")
+	store, dir := newSessionStore(t)
+	if _, err := store.Create(session.SessionMeta{Name: "plain session", Model: "deepseek-flash", WorkDir: dir}); err != nil {
+		t.Fatal(err)
+	}
+	m := newTestModel(t, Options{SessionStore: store, WorkDir: dir})
+	for _, command := range []string{"/model", "/sessions", "/stats", "/skills", "/mcp"} {
+		submitText(t, m, command)
+		view := m.View()
+		if strings.Contains(view, "\x1b[") {
+			t.Fatalf("%s view contains ANSI escapes: %q", command, view)
+		}
+		for _, r := range view {
+			if r > 127 {
+				t.Fatalf("%s view contains non-ASCII rune %q", command, r)
+			}
+		}
+		press(t, m, tea.KeyEsc)
+		if m.activeModal != modalNone {
+			t.Fatalf("%s did not close on Esc", command)
+		}
+	}
+}
+
+func pressRune(t *testing.T, m *Model, text string) {
+	t.Helper()
+	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(text)})
+}
+
+func indexOfSession(items []modalSession, id string) int {
+	for i, item := range items {
+		if item.ID == id {
+			return i
+		}
+	}
+	return 0
+}
+
+func providerMessage(role, content string) provider.Message {
+	return provider.Message{Role: provider.Role(role), Content: content}
+}
+
+func sessionUsage(prompt, completion, hit, miss int) provider.Usage {
+	return provider.Usage{
+		PromptTokens:          prompt,
+		CompletionTokens:      completion,
+		TotalTokens:           prompt + completion,
+		PromptCacheHitTokens:  hit,
+		PromptCacheMissTokens: miss,
 	}
 }
