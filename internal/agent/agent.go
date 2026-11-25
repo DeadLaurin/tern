@@ -942,9 +942,9 @@ func (a *Agent) runToolBatch(ctx context.Context, turn, step int, calls []provid
 			i++
 			continue
 		}
-		if prepared[i].tool.IsReadOnly() && prepared[i].tool.IsParallelSafe() {
+		if prepared[i].tool.IsParallelSafe() {
 			j := i
-			for j < len(prepared) && prepared[j].ready && prepared[j].tool.IsReadOnly() && prepared[j].tool.IsParallelSafe() {
+			for j < len(prepared) && prepared[j].ready && prepared[j].tool.IsParallelSafe() {
 				j++
 			}
 			var wg sync.WaitGroup
