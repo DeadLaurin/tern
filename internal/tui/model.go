@@ -1066,7 +1066,6 @@ func (m *Model) editorBoxView() string {
 	box := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(lipgloss.Color(colorBorder)).
-		Background(lipgloss.Color(colorSurface)).
 		Padding(0, 1).
 		Width(maxInt(8, colW-2)).
 		Render(body)
