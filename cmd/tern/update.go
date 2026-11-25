@@ -1,0 +1,362 @@
+package main
+
+import (
+	"archive/tar"
+	"archive/zip"
+	"bytes"
+	"compress/gzip"
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"net/http"
+	"os"
+	"path/filepath"
+	"runtime"
+	"strings"
+	"time"
+)
+
+const defaultUpdateRepo = "DeadLaurin/tern"
+
+var (
+	githubAPIBase      = "https://api.github.com"
+	githubDownloadBase = "https://github.com"
+)
+
+type updateOptions struct {
+	Repo           string
+	CurrentVersion string
+	GOOS           string
+	GOARCH         string
+	Client         *http.Client
+	APIBase        string
+	DownloadBase   string
+	TargetPath     string
+}
+
+func runUpdateCommand(out, errOut io.Writer) int {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+
+	repo := strings.TrimSpace(os.Getenv("TERN_UPDATE_REPO"))
+	if repo == "" {
+		repo = defaultUpdateRepo
+	}
+	fmt.Fprintf(out, "Checking for tern updates from %s...\n", repo)
+	tag, updated, err := performUpdate(ctx, updateOptions{
+		Repo:           repo,
+		CurrentVersion: version,
+		GOOS:           runtime.GOOS,
+		GOARCH:         runtime.GOARCH,
+	})
+	if err != nil {
+		fmt.Fprintf(errOut, "tern update: %v\n", err)
+		return 1
+	}
+	if !updated {
+		fmt.Fprintf(out, "tern is already up to date (%s).\n", tag)
+		return 0
+	}
+	fmt.Fprintf(out, "Updated tern to %s.\n", tag)
+	return 0
+}
+
+func performUpdate(ctx context.Context, opts updateOptions) (string, bool, error) {
+	if opts.Repo == "" {
+		opts.Repo = defaultUpdateRepo
+	}
+	if opts.GOOS == "" {
+		opts.GOOS = runtime.GOOS
+	}
+	if opts.GOARCH == "" {
+		opts.GOARCH = runtime.GOARCH
+	}
+	if opts.Client == nil {
+		opts.Client = &http.Client{Timeout: 60 * time.Second}
+	}
+	if opts.APIBase == "" {
+		opts.APIBase = githubAPIBase
+	}
+	if opts.DownloadBase == "" {
+		opts.DownloadBase = githubDownloadBase
+	}
+
+	tag, err := latestTag(ctx, opts.Client, opts.APIBase, opts.Repo)
+	if err != nil {
+		return "", false, err
+	}
+	if normalizeVersion(tag) == normalizeVersion(opts.CurrentVersion) {
+		return tag, false, nil
+	}
+
+	releaseVersion := strings.TrimPrefix(tag, "v")
+	asset := updateAssetName(releaseVersion, opts.GOOS, opts.GOARCH)
+	base := fmt.Sprintf("%s/%s/releases/download/%s",
+		strings.TrimRight(opts.DownloadBase, "/"), opts.Repo, tag)
+
+	archive, err := download(ctx, opts.Client, base+"/"+asset)
+	if err != nil {
+		return tag, false, err
+	}
+	checksums, err := download(ctx, opts.Client, base+"/checksums.txt")
+	if err != nil {
+		return tag, false, err
+	}
+	if err := verifyChecksum(asset, archive, checksums); err != nil {
+		return tag, false, err
+	}
+	binary, mode, err := extractBinary(asset, archive, opts.GOOS)
+	if err != nil {
+		return tag, false, err
+	}
+	if err := replaceExecutable(opts.TargetPath, binary, mode); err != nil {
+		return tag, false, err
+	}
+	return tag, true, nil
+}
+
+func normalizeVersion(v string) string {
+	v = strings.TrimSpace(v)
+	v = strings.TrimPrefix(v, "v")
+	return v
+}
+
+func updateAssetName(version, goos, goarch string) string {
+	ext := "tar.gz"
+	if goos == "windows" {
+		ext = "zip"
+	}
+	return fmt.Sprintf("tern_%s_%s_%s.%s", version, goos, goarch, ext)
+}
+
+func latestTag(ctx context.Context, client *http.Client, apiBase, repo string) (string, error) {
+	url := fmt.Sprintf("%s/repos/%s/releases/latest", strings.TrimRight(apiBase, "/"), repo)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("Accept", "application/vnd.github+json")
+	req.Header.Set("User-Agent", "tern-updater")
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("query latest release: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 4<<10))
+		return "", fmt.Errorf("query latest release: %s: %s", resp.Status, strings.TrimSpace(string(body)))
+	}
+	var payload struct {
+		TagName string `json:"tag_name"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
+		return "", fmt.Errorf("decode latest release: %w", err)
+	}
+	payload.TagName = strings.TrimSpace(payload.TagName)
+	if payload.TagName == "" {
+		return "", errors.New("latest release has no tag_name")
+	}
+	return payload.TagName, nil
+}
+
+func download(ctx context.Context, client *http.Client, url string) ([]byte, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("User-Agent", "tern-updater")
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("download %s: %w", url, err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 4<<10))
+		return nil, fmt.Errorf("download %s: %s: %s", url, resp.Status, strings.TrimSpace(string(body)))
+	}
+	data, err := io.ReadAll(io.LimitReader(resp.Body, 256<<20))
+	if err != nil {
+		return nil, fmt.Errorf("download %s: %w", url, err)
+	}
+	return data, nil
+}
+
+func verifyChecksum(asset string, data, checksums []byte) error {
+	expected, ok := checksumFor(asset, checksums)
+	if !ok {
+		return fmt.Errorf("checksums.txt has no entry for %s", asset)
+	}
+	sum := sha256.Sum256(data)
+	actual := hex.EncodeToString(sum[:])
+	if !strings.EqualFold(expected, actual) {
+		return fmt.Errorf("checksum verification failed for %s: expected %s, got %s", asset, expected, actual)
+	}
+	return nil
+}
+
+func checksumFor(asset string, checksums []byte) (string, bool) {
+	for _, line := range strings.Split(string(checksums), "\n") {
+		fields := strings.Fields(strings.TrimSpace(line))
+		if len(fields) < 2 {
+			continue
+		}
+		name := strings.TrimPrefix(fields[len(fields)-1], "*")
+		if name == asset {
+			return strings.ToLower(fields[0]), true
+		}
+	}
+	return "", false
+}
+
+func extractBinary(asset string, data []byte, goos string) ([]byte, os.FileMode, error) {
+	want := "tern"
+	if goos == "windows" {
+		want = "tern.exe"
+	}
+	if strings.HasSuffix(asset, ".zip") {
+		return extractZipBinary(data, want)
+	}
+	return extractTarBinary(data, want)
+}
+
+func extractZipBinary(data []byte, want string) ([]byte, os.FileMode, error) {
+	reader, err := zip.NewReader(bytes.NewReader(data), int64(len(data)))
+	if err != nil {
+		return nil, 0, fmt.Errorf("open zip: %w", err)
+	}
+	for _, file := range reader.File {
+		if file.FileInfo().IsDir() {
+			continue
+		}
+		if filepath.Base(file.Name) != want || unsafeArchivePath(file.Name) {
+			continue
+		}
+		f, err := file.Open()
+		if err != nil {
+			return nil, 0, fmt.Errorf("open %s in zip: %w", file.Name, err)
+		}
+		body, err := io.ReadAll(f)
+		_ = f.Close()
+		if err != nil {
+			return nil, 0, fmt.Errorf("read %s in zip: %w", file.Name, err)
+		}
+		return body, archiveMode(file.Mode()), nil
+	}
+	return nil, 0, fmt.Errorf("%s not found in archive", want)
+}
+
+func extractTarBinary(data []byte, want string) ([]byte, os.FileMode, error) {
+	gz, err := gzip.NewReader(bytes.NewReader(data))
+	if err != nil {
+		return nil, 0, fmt.Errorf("open gzip archive: %w", err)
+	}
+	defer gz.Close()
+	tr := tar.NewReader(gz)
+	for {
+		header, err := tr.Next()
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		if err != nil {
+			return nil, 0, fmt.Errorf("read tar archive: %w", err)
+		}
+		if header.Typeflag != tar.TypeReg && header.Typeflag != tar.TypeRegA {
+			continue
+		}
+		if filepath.Base(header.Name) != want || unsafeArchivePath(header.Name) {
+			continue
+		}
+		body, err := io.ReadAll(tr)
+		if err != nil {
+			return nil, 0, fmt.Errorf("read %s from tar: %w", header.Name, err)
+		}
+		return body, archiveMode(header.FileInfo().Mode()), nil
+	}
+	return nil, 0, fmt.Errorf("%s not found in archive", want)
+}
+
+func unsafeArchivePath(name string) bool {
+	clean := filepath.Clean(name)
+	return filepath.IsAbs(clean) || clean == ".." || strings.HasPrefix(clean, ".."+string(filepath.Separator))
+}
+
+func archiveMode(mode os.FileMode) os.FileMode {
+	mode = mode.Perm()
+	if mode == 0 {
+		return 0o755
+	}
+	return mode
+}
+
+// replaceExecutable atomically replaces target (or the running executable)
+// with data.
+func replaceExecutable(target string, data []byte, mode os.FileMode) error {
+	if strings.TrimSpace(target) == "" {
+		exe, err := os.Executable()
+		if err != nil {
+			return fmt.Errorf("locate current executable: %w", err)
+		}
+		if resolved, err := filepath.EvalSymlinks(exe); err == nil {
+			exe = resolved
+		}
+		target = exe
+	}
+	if mode == 0 {
+		mode = 0o755
+	}
+	if info, err := os.Stat(target); err == nil {
+		if info.Mode().Perm() != 0 {
+			mode = info.Mode().Perm()
+		}
+	}
+
+	dir := filepath.Dir(target)
+	tmp, err := os.CreateTemp(dir, ".tern-update-*")
+	if err != nil {
+		return fmt.Errorf("create temporary executable next to %s: %w", target, err)
+	}
+	tmpPath := tmp.Name()
+	cleanup := true
+	defer func() {
+		if cleanup {
+			_ = os.Remove(tmpPath)
+		}
+	}()
+	if err := tmp.Chmod(mode); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if _, err := tmp.Write(data); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Sync(); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	if err := os.Rename(tmpPath, target); err != nil {
+		// Windows may refuse to replace a running executable via rename.
+		// Move the old binary aside and retry once.
+		backup := target + ".old"
+		if removeErr := os.Remove(backup); removeErr != nil && !errors.Is(removeErr, os.ErrNotExist) {
+			return fmt.Errorf("replace executable: %w", err)
+		}
+		if moveErr := os.Rename(target, backup); moveErr != nil {
+			return fmt.Errorf("replace executable: %w", err)
+		}
+		if retryErr := os.Rename(tmpPath, target); retryErr != nil {
+			_ = os.Rename(backup, target)
+			return fmt.Errorf("replace executable: %w", retryErr)
+		}
+		_ = os.Remove(backup)
+	}
+	cleanup = false
+	return nil
+}
