@@ -1809,3 +1809,157 @@ func TestWelcomeTernEmblemAndNoColor(t *testing.T) {
 		}
 	}
 }
+
+func TestAgentPeekModalFromSidebarAndAgentsPanel(t *testing.T) {
+	store, dir := newSessionStore(t)
+	parent, err := store.Create(session.SessionMeta{Name: "parent", Model: "deepseek-flash", WorkDir: dir})
+	if err != nil {
+		t.Fatal(err)
+	}
+	child, err := parent.CreateChild("call-1", "agent-1", subagent.AgentExplore, "find the parser", "", "deepseek-flash")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := child.AppendMessage(provider.Message{Role: provider.RoleUser, Content: "inspect the parser and report"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := child.AppendMessage(provider.Message{
+		Role:             provider.RoleAssistant,
+		ReasoningContent: "weighing the parser options",
+		Content:          "looked at parser.go",
+		ToolCalls: []provider.ToolCall{{
+			ID: "call-1", Type: "function",
+			Function: provider.ToolCallFunction{Name: "read_file", Arguments: `{"path":"parser.go"}`},
+		}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := child.AppendMessage(provider.Message{Role: provider.RoleTool, ToolCallID: "call-1", Name: "read_file", Content: "package parser\nfunc Parse() {}"}); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 40; i++ {
+		if err := child.AppendMessage(provider.Message{Role: provider.RoleAssistant, Content: "filler transcript line"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	second, err := parent.CreateChild("call-2", "agent-2", subagent.AgentReview, "review the patch", "", "deepseek-flash")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := second.AppendMessage(provider.Message{Role: provider.RoleUser, Content: "second prompt body"}); err != nil {
+		t.Fatal(err)
+	}
+
+	m := newTestModel(t, Options{SessionStore: store, Session: parent, WorkDir: dir})
+	for _, event := range []subagent.Event{
+		{Type: subagent.EventSubagentStart, AgentID: "agent-1", AgentType: subagent.AgentExplore, Description: "find the parser", Status: subagent.StatusRunning},
+		{Type: subagent.EventSubagentStart, AgentID: "agent-2", AgentType: subagent.AgentReview, Description: "review the patch", Status: subagent.StatusRunning},
+	} {
+		m.Update(subagentEventMsg{event: event})
+	}
+	m.agentLines["agent-1"] = &strings.Builder{}
+	m.agentLines["agent-1"].WriteString("live streaming chunk")
+
+	press(t, m, tea.KeyTab)
+	if !m.agentsOpen {
+		t.Fatal("Tab did not focus sub-agents")
+	}
+	press(t, m, tea.KeyEnter)
+	if m.activeModal != modalAgentPeek {
+		t.Fatalf("Enter on focused sub-agent opened %v, want modalAgentPeek", m.activeModal)
+	}
+	if m.modal.peekAgentID != "agent-1" {
+		t.Fatalf("peeked agent = %q, want agent-1", m.modal.peekAgentID)
+	}
+	view := m.View()
+	for _, want := range []string{"Prompt", "inspect the parser and report", "looked at parser.go", "read_file", "Thought"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("peek view missing %q:\n%s", want, view)
+		}
+	}
+
+	before := m.modal.peekScroll
+	press(t, m, tea.KeyDown)
+	if m.modal.peekScroll <= before {
+		t.Fatalf("down did not scroll peek (before=%d after=%d)", before, m.modal.peekScroll)
+	}
+	press(t, m, tea.KeyPgDown)
+	if m.modal.peekScroll <= before {
+		t.Fatal("pgdown did not advance the peek")
+	}
+	press(t, m, tea.KeyEnd)
+	if !strings.Contains(m.View(), "live streaming chunk") {
+		t.Fatalf("peek view missing live streaming output:\n%s", m.View())
+	}
+
+	press(t, m, tea.KeyTab)
+	if m.modal.peekAgentID != "agent-2" {
+		t.Fatalf("tab switch peeked %q, want agent-2", m.modal.peekAgentID)
+	}
+	if !strings.Contains(m.View(), "second prompt body") {
+		t.Fatalf("switched peek missing second transcript:\n%s", m.View())
+	}
+	press(t, m, tea.KeyRight)
+	if m.modal.peekAgentID != "agent-1" {
+		t.Fatalf("right switch wrapped peeked %q, want agent-1", m.modal.peekAgentID)
+	}
+
+	press(t, m, tea.KeyEsc)
+	if m.activeModal != modalNone {
+		t.Fatal("Esc did not close the peek modal")
+	}
+
+	// The /agents panel also opens the peek, and /agents <index> jumps directly.
+	submitText(t, m, "/agents")
+	if !m.agentsPanel {
+		t.Fatal("/agents did not open the panel")
+	}
+	press(t, m, tea.KeyEnter)
+	if m.activeModal != modalAgentPeek || m.modal.peekAgentID != "agent-1" {
+		t.Fatalf("/agents Enter did not peek agent-1 (modal=%v id=%q)", m.activeModal, m.modal.peekAgentID)
+	}
+	press(t, m, tea.KeyEsc)
+
+	submitText(t, m, "/agents 2")
+	if m.activeModal != modalAgentPeek || m.modal.peekAgentID != "agent-2" {
+		t.Fatalf("/agents 2 did not peek agent-2 (modal=%v id=%q)", m.activeModal, m.modal.peekAgentID)
+	}
+}
+
+func TestPersistentChatbarHistory(t *testing.T) {
+	dir := t.TempDir()
+	first := newTestModel(t, Options{GlobalConfigDir: dir})
+	submitText(t, first, "/cost")
+	first.running = true // keep the prompt queued instead of starting a turn
+	submitText(t, first, "first line\nsecond line")
+
+	historyFile := filepath.Join(dir, "history.jsonl")
+	data, err := os.ReadFile(historyFile)
+	if err != nil {
+		t.Fatalf("history file was not written: %v", err)
+	}
+	if got := strings.Count(strings.TrimSpace(string(data)), "\n") + 1; got != 2 {
+		t.Fatalf("history file lines = %d, want 2:\n%s", got, data)
+	}
+
+	second := newTestModel(t, Options{GlobalConfigDir: dir})
+	if got := second.ed.History(); len(got) != 2 {
+		t.Fatalf("loaded history = %#v, want 2 entries", got)
+	}
+	press(t, second, tea.KeyUp)
+	if got := second.ed.Value(); got != "first line\nsecond line" {
+		t.Fatalf("first up = %q, want the multi-line prompt", got)
+	}
+	press(t, second, tea.KeyUp)
+	if got := second.ed.Value(); got != "/cost" {
+		t.Fatalf("second up = %q, want /cost (zsh-style multi-line stepping)", got)
+	}
+	press(t, second, tea.KeyDown)
+	if got := second.ed.Value(); got != "first line\nsecond line" {
+		t.Fatalf("down = %q, want the multi-line prompt", got)
+	}
+	press(t, second, tea.KeyDown)
+	if got := second.ed.Value(); got != "" {
+		t.Fatalf("final down = %q, want the empty draft", got)
+	}
+}

@@ -31,6 +31,7 @@ const (
 	modalSkills
 	modalMCP
 	modalHelp
+	modalAgentPeek
 )
 
 var reasoningEfforts = []string{"none", "low", "high", "max"}
@@ -90,6 +91,13 @@ type modalState struct {
 	mcp []ext.MCPStatus
 
 	helpItems []helpItem
+
+	// Agent peek modal state. peekAgentID names the sub-agent whose child
+	// transcript is shown, peekScroll is the first visible body line, and
+	// peekReasoning toggles the muted reasoning rail.
+	peekAgentID   string
+	peekScroll    int
+	peekReasoning bool
 }
 
 func (m *Model) setModal(kind modalKind) {
@@ -119,6 +127,8 @@ func (m *Model) handleModalKey(msg tea.KeyMsg) tea.Cmd {
 		return m.handleMCPModalKey(msg)
 	case modalHelp:
 		return m.handleHelpModalKey(msg)
+	case modalAgentPeek:
+		return m.handleAgentPeekKey(msg)
 	}
 	return nil
 }
@@ -1638,6 +1648,8 @@ func (m *Model) modalView() string {
 		return m.mcpModalView()
 	case modalHelp:
 		return m.helpModalView()
+	case modalAgentPeek:
+		return m.agentPeekView()
 	}
 	return ""
 }

@@ -243,7 +243,8 @@ func (m *Model) sidebarSubagents(width, budget int) string {
 		}
 	}
 	if m.agentsOpen {
-		lines = append(lines, m.st.paint(m.st.dim, truncateCell("↑/↓ agent · c cancel · C all · Esc chat", width)))
+		lines = append(lines, m.st.paint(m.st.dim, truncateCell("enter peek · ↑/↓ select · c cancel · esc back", width)))
+		lines = append(lines, m.st.paint(m.st.dim, truncateCell("Esc chat · C cancel all", width)))
 	}
 	return strings.Join(lines, "\n")
 }

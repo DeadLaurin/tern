@@ -16,6 +16,11 @@ type editor struct {
 	history   []string
 	histIndex int
 	draft     string
+	// historyBrowsing is true while the buffer mirrors a recalled history
+	// entry. historyCursorMoved records a manual cursor move so Up/Down can
+	// resume normal multi-line navigation instead of stepping through history.
+	historyBrowsing    bool
+	historyCursorMoved bool
 
 	search searchState
 
@@ -120,11 +125,20 @@ func (e *editor) DeleteForward() {
 	e.suggestions = nil
 }
 
+// noteManualCursorMove marks that the operator moved the cursor after recalling
+// a history entry, so vertical keys resume normal line navigation.
+func (e *editor) noteManualCursorMove() {
+	if e.historyBrowsing {
+		e.historyCursorMoved = true
+	}
+}
+
 // MoveLeft moves one rune left.
 func (e *editor) MoveLeft() {
 	if e.cursor > 0 {
 		e.cursor--
 	}
+	e.noteManualCursorMove()
 }
 
 // MoveRight moves one rune right.
@@ -132,6 +146,7 @@ func (e *editor) MoveRight() {
 	if e.cursor < len(e.text) {
 		e.cursor++
 	}
+	e.noteManualCursorMove()
 }
 
 // MoveLineStart moves to the start of the current line.
@@ -139,6 +154,7 @@ func (e *editor) MoveLineStart() {
 	for e.cursor > 0 && e.text[e.cursor-1] != '\n' {
 		e.cursor--
 	}
+	e.noteManualCursorMove()
 }
 
 // MoveLineEnd moves to the end of the current line.
@@ -146,11 +162,17 @@ func (e *editor) MoveLineEnd() {
 	for e.cursor < len(e.text) && e.text[e.cursor] != '\n' {
 		e.cursor++
 	}
+	e.noteManualCursorMove()
 }
 
 // MoveUp moves the cursor up one line, preferring history navigation when the
-// cursor is already on the first line.
+// cursor is already on the first line. While browsing a recalled multi-line
+// entry, an untouched cursor steps straight to the previous history entry just
+// like zsh.
 func (e *editor) MoveUp() bool {
+	if e.historyBrowsing && !e.historyCursorMoved {
+		return e.HistoryPrev()
+	}
 	isFirstLine := true
 	for i := 0; i < e.cursor && i < len(e.text); i++ {
 		if e.text[i] == '\n' {
@@ -168,12 +190,17 @@ func (e *editor) MoveUp() bool {
 		e.cursor = e.lineStart()
 	}
 	e.cursor = clampInt(e.cursor+col, e.lineStart(), e.lineEnd())
+	e.noteManualCursorMove()
 	return false
 }
 
 // MoveDown moves the cursor down one line, preferring history navigation when
-// the cursor is on the last line.
+// the cursor is on the last line. While browsing an untouched recalled entry it
+// steps forward through history immediately.
 func (e *editor) MoveDown() bool {
+	if e.historyBrowsing && !e.historyCursorMoved {
+		return e.HistoryNext()
+	}
 	if e.CursorLine() >= e.LineCount()-1 {
 		return e.HistoryNext()
 	}
@@ -184,6 +211,7 @@ func (e *editor) MoveDown() bool {
 	}
 	e.cursor = end + 1
 	e.cursor = clampInt(e.cursor+col, e.lineStart(), e.lineEnd())
+	e.noteManualCursorMove()
 	return false
 }
 
@@ -236,24 +264,52 @@ func (e *editor) lineEnd() int {
 }
 
 // AddHistory records a submitted prompt. Consecutive duplicates are ignored.
-func (e *editor) AddHistory(s string) {
+// It reports whether a new entry was actually appended.
+func (e *editor) AddHistory(s string) bool {
 	s = strings.TrimSpace(s)
 	if s == "" {
-		return
+		return false
 	}
+	added := false
 	if n := len(e.history); n == 0 || e.history[n-1] != s {
 		e.history = append(e.history, s)
-		if len(e.history) > 200 {
-			e.history = e.history[len(e.history)-200:]
+		if len(e.history) > 500 {
+			e.history = e.history[len(e.history)-500:]
 		}
+		added = true
 	}
 	e.histIndex = len(e.history)
 	e.draft = ""
+	e.historyBrowsing = false
+	e.historyCursorMoved = false
+	return added
+}
+
+// SetHistory replaces the in-memory history (used when loading the persisted
+// terminal-style history file).
+func (e *editor) SetHistory(items []string) {
+	e.history = e.history[:0]
+	for _, item := range items {
+		item = strings.TrimSpace(item)
+		if item == "" {
+			continue
+		}
+		if n := len(e.history); n > 0 && e.history[n-1] == item {
+			continue
+		}
+		e.history = append(e.history, item)
+	}
+	if len(e.history) > 500 {
+		e.history = e.history[len(e.history)-500:]
+	}
+	e.resetHistoryNav()
 }
 
 func (e *editor) resetHistoryNav() {
 	e.histIndex = len(e.history)
 	e.draft = ""
+	e.historyBrowsing = false
+	e.historyCursorMoved = false
 }
 
 // HistoryPrev recalls the previous history entry. It reports whether history
@@ -269,6 +325,8 @@ func (e *editor) HistoryPrev() bool {
 		e.histIndex--
 	}
 	e.setTextFromHistory(e.history[e.histIndex])
+	e.historyBrowsing = true
+	e.historyCursorMoved = false
 	return true
 }
 
@@ -280,8 +338,12 @@ func (e *editor) HistoryNext() bool {
 	e.histIndex++
 	if e.histIndex == len(e.history) {
 		e.setTextFromHistory(e.draft)
+		e.historyBrowsing = false
+		e.historyCursorMoved = false
 	} else {
 		e.setTextFromHistory(e.history[e.histIndex])
+		e.historyBrowsing = true
+		e.historyCursorMoved = false
 	}
 	return true
 }

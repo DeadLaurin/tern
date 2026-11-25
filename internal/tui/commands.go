@@ -92,6 +92,10 @@ func (m *Model) handleSlash(line string, attachments []provider.ContentPart) tea
 		return nil
 
 	case "agents":
+		if strings.TrimSpace(args) != "" {
+			m.openAgentPeekArg(args)
+			return nil
+		}
 		m.agentsPanel = true
 		m.agentsOpen = false
 		if len(m.agentOrder) > 0 {

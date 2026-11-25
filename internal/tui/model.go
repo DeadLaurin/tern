@@ -195,6 +195,11 @@ type Model struct {
 
 	commands []terncontext.SlashCommand
 
+	// historyPath is the persisted terminal-style chatbar history. It stays
+	// empty when no config dir was supplied so tests and embedded use never
+	// touch the user's home directory.
+	historyPath string
+
 	files []string
 
 	dirty      bool
@@ -227,6 +232,11 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.spinnerFrame++
 		m.flushPending()
 		m.syncAgents()
+		if m.activeModal == modalAgentPeek {
+			// Peeking reads the child transcript live, so keep repainting while
+			// the sub-agent streams new output.
+			m.dirty = true
+		}
 		if m.quitArmed && time.Since(m.quitAt) > quitTimeout {
 			m.quitArmed = false
 			if strings.Contains(m.statusMsg, "again to quit") {
@@ -284,6 +294,18 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case tea.MouseMsg:
+		if m.activeModal == modalAgentPeek {
+			switch {
+			case msg.Action == tea.MouseActionPress && msg.Button == tea.MouseButtonWheelUp,
+				msg.Type == tea.MouseWheelUp:
+				m.scrollAgentPeek(-3)
+				return m, nil
+			case msg.Action == tea.MouseActionPress && msg.Button == tea.MouseButtonWheelDown,
+				msg.Type == tea.MouseWheelDown:
+				m.scrollAgentPeek(3)
+				return m, nil
+			}
+		}
 		switch {
 		case msg.Action == tea.MouseActionPress && msg.Button == tea.MouseButtonWheelUp,
 			msg.Type == tea.MouseWheelUp:
@@ -372,6 +394,10 @@ func (m *Model) handleKey(msg tea.KeyMsg) tea.Cmd {
 		m.toggleAgentFocus()
 		return nil
 	}
+	if msg.Type == tea.KeyEnter && m.agentsOpen && len(m.agentOrder) > 0 && m.ed.IsEmpty() && !m.completionTokenActive() {
+		m.openAgentPeek("")
+		return nil
+	}
 	if m.agentsOpen && len(m.agentOrder) > 0 && msg.Type == tea.KeyRunes {
 		switch string(msg.Runes) {
 		case "c":
@@ -434,7 +460,7 @@ func (m *Model) handleKey(msg tea.KeyMsg) tea.Cmd {
 			m.followTail = m.viewport.AtBottom()
 			return nil
 		}
-		if m.agentsExpanded() {
+		if m.agentsOpen && m.ed.IsEmpty() && len(m.agentOrder) > 0 && !m.completionTokenActive() {
 			m.cycleAgentFocus(-1)
 			return nil
 		}
@@ -444,7 +470,7 @@ func (m *Model) handleKey(msg tea.KeyMsg) tea.Cmd {
 			m.followTail = m.viewport.AtBottom()
 			return nil
 		}
-		if m.agentsExpanded() {
+		if m.agentsOpen && m.ed.IsEmpty() && len(m.agentOrder) > 0 && !m.completionTokenActive() {
 			m.cycleAgentFocus(1)
 			return nil
 		}
@@ -584,7 +610,7 @@ func (m *Model) submit() tea.Cmd {
 		return nil
 	}
 	attachments := m.ed.TakeAttachments()
-	m.ed.AddHistory(text)
+	m.recordHistory(text)
 	m.ed.Reset()
 	m.flushPending()
 
@@ -596,6 +622,81 @@ func (m *Model) submit() tea.Cmd {
 		return nil
 	}
 	return m.startTurn(text, attachments)
+}
+
+// recordHistory stores a submitted chatbar entry in memory and, when a global
+// config dir was provided, mirrors it to the persistent history file.
+func (m *Model) recordHistory(text string) {
+	if !m.ed.AddHistory(text) {
+		return
+	}
+	m.persistHistory()
+}
+
+// loadHistory restores the persisted terminal-style history. Missing or
+// malformed lines are ignored so a damaged file never blocks startup.
+func (m *Model) loadHistory() {
+	if m.historyPath == "" {
+		return
+	}
+	data, err := os.ReadFile(m.historyPath)
+	if err != nil {
+		return
+	}
+	var items []string
+	for _, line := range strings.Split(string(data), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		var entry string
+		if err := json.Unmarshal([]byte(line), &entry); err != nil {
+			continue
+		}
+		if strings.TrimSpace(entry) != "" {
+			items = append(items, entry)
+		}
+	}
+	m.ed.SetHistory(items)
+}
+
+// persistHistory rewrites the history file atomically (temp file + rename). The
+// file is JSONL so multi-line prompts round-trip exactly.
+func (m *Model) persistHistory() {
+	if m.historyPath == "" {
+		return
+	}
+	dir := filepath.Dir(m.historyPath)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return
+	}
+	tmp, err := os.CreateTemp(dir, "history-*.jsonl")
+	if err != nil {
+		return
+	}
+	tmpPath := tmp.Name()
+	cleanup := func() {
+		tmp.Close()
+		os.Remove(tmpPath)
+	}
+	for _, entry := range m.ed.History() {
+		line, err := json.Marshal(entry)
+		if err != nil {
+			cleanup()
+			return
+		}
+		if _, err := tmp.Write(append(line, '\n')); err != nil {
+			cleanup()
+			return
+		}
+	}
+	if err := tmp.Close(); err != nil {
+		os.Remove(tmpPath)
+		return
+	}
+	if err := os.Rename(tmpPath, m.historyPath); err != nil {
+		os.Remove(tmpPath)
+	}
 }
 
 // queueMessage appends a prompt to the FIFO queue shown above the editor.
@@ -657,7 +758,7 @@ func (m *Model) steerRunning(text string) bool {
 func (m *Model) handleSteerKey() {
 	if text := strings.TrimSpace(m.ed.Value()); text != "" {
 		if m.steerRunning(text) {
-			m.ed.AddHistory(text)
+			m.recordHistory(text)
 			m.ed.Reset()
 		}
 		return

@@ -103,7 +103,7 @@ func (m *Model) agentsPanelView() string {
 		b.WriteString("\n")
 	}
 	b.WriteString("\n")
-	b.WriteString(m.st.paint(m.st.dim, "↑/↓ select · enter inspect · c cancel agent · C cancel all · esc close"))
+	b.WriteString(m.st.paint(m.st.dim, "↑/↓ select · enter peek · c cancel agent · C cancel all · esc close"))
 	return b.String()
 }
 
@@ -133,10 +133,7 @@ func (m *Model) handleAgentsPanelKey(msg tea.KeyMsg) tea.Cmd {
 			return nil
 		}
 		m.agentFocus = m.panelIndex
-		m.agentsOpen = true
-		m.agentsPanel = false
-		m.statusMsg = "Inspecting sub-agent (Esc to return)"
-		m.dirty = true
+		m.openAgentPeek(m.agentOrder[m.panelIndex])
 		return nil
 	case tea.KeyRunes:
 		switch string(msg.Runes) {

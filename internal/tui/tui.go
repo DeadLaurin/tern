@@ -99,6 +99,9 @@ func Run(ctx context.Context, opts Options) error {
 // New constructs a model without starting a program. It is useful for tests
 // and embeddings that drive the model directly.
 func New(opts Options) *Model {
+	// Capture the caller-provided config dir before normalization so an empty
+	// value stays purely in-memory (no writes to the real user home).
+	rawConfigDir := strings.TrimSpace(opts.GlobalConfigDir)
 	opts = normalizeOptions(opts)
 	m := &Model{
 		opts:         opts,
@@ -112,6 +115,10 @@ func New(opts Options) *Model {
 		followTail:   true,
 		ctxWindow:    defaultContextWindow(opts),
 		sessionStart: time.Now(),
+	}
+	if rawConfigDir != "" {
+		m.historyPath = filepath.Join(rawConfigDir, "history.jsonl")
+		m.loadHistory()
 	}
 	m.viewport.MouseWheelEnabled = true
 	m.viewport.MouseWheelDelta = 3
