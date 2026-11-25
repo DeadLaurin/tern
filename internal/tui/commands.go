@@ -36,11 +36,13 @@ var builtinCommandNames = []string{
 	"model",
 	"name",
 	"plan",
+	"queue",
 	"quit",
 	"rewind",
 	"sessions",
 	"skills",
 	"stats",
+	"steer",
 	"thinking",
 	"undo",
 }
@@ -67,6 +69,12 @@ func (m *Model) handleSlash(line string, attachments []provider.ContentPart) tea
 
 	case "plan":
 		return m.cmdPlan()
+
+	case "steer":
+		return m.cmdSteer(args)
+
+	case "queue":
+		return m.cmdQueue(args)
 
 	case "yolo":
 		m.toggleYolo()
@@ -205,6 +213,8 @@ func (m *Model) helpText() string {
 		"/plan":                    "toggle read-only plan mode",
 		"/yolo":                    "toggle dangerous allow-all mode (Ctrl+Y)",
 		"/compact [text]":          "summarize older context (optional instructions)",
+		"/steer <text>":            "steer the running turn, or start one when idle (Ctrl+S)",
+		"/queue [clear|run]":       "show, clear, or run queued prompts",
 		"/cost":                    "show token usage and estimated cost",
 		"/context":                 "show context window usage",
 		"/agents":                  "inspect, cancel one, or cancel all sub-agents",
@@ -238,8 +248,65 @@ func (m *Model) helpText() string {
 			fmt.Fprintf(&b, "  /%-26s %s\n", cmd.Name, desc)
 		}
 	}
-	b.WriteString("\nKeys: enter send · shift/alt+enter newline · ctrl+r history search · ctrl+t thinking · ctrl+y yolo · pgup/pgdn scroll · ctrl+g $EDITOR · tab complete · ctrl+c cancel/quit")
+	b.WriteString("\nKeys: enter send · shift/alt+enter newline · ctrl+s steer · ctrl+r history search · ctrl+t thinking · ctrl+y yolo · pgup/pgdn scroll · ctrl+g $EDITOR · tab complete · ctrl+c cancel/quit")
 	return strings.TrimRight(b.String(), "\n")
+}
+
+// cmdSteer steers the active turn, or starts a fresh turn when idle.
+func (m *Model) cmdSteer(args string) tea.Cmd {
+	text := strings.TrimSpace(args)
+	if text == "" {
+		m.addError("Usage: /steer <text>")
+		return nil
+	}
+	if m.running {
+		m.steerRunning(text)
+		return nil
+	}
+	return m.startTurn(text, nil)
+}
+
+// cmdQueue inspects and manages prompts waiting behind the active turn.
+func (m *Model) cmdQueue(args string) tea.Cmd {
+	switch strings.ToLower(strings.TrimSpace(args)) {
+	case "clear":
+		n := len(m.queued)
+		m.queued = nil
+		m.holdQueue = false
+		m.dirty = true
+		if n == 0 {
+			m.addInfo("Queue is already empty.")
+			return nil
+		}
+		m.addInfo(fmt.Sprintf("Cleared %d queued message(s).", n))
+		return nil
+	case "run":
+		if len(m.queued) == 0 {
+			m.addInfo("Queue is empty.")
+			return nil
+		}
+		if m.running {
+			m.addInfo(fmt.Sprintf("%d queued · waiting for the current turn to finish.", len(m.queued)))
+			return nil
+		}
+		return m.dequeueAndStart()
+	case "":
+		if len(m.queued) == 0 {
+			m.addInfo("Queue is empty.")
+			return nil
+		}
+		var b strings.Builder
+		fmt.Fprintf(&b, "Queued (%d):\n", len(m.queued))
+		for i, item := range m.queued {
+			fmt.Fprintf(&b, "  %d. %s\n", i+1, truncateCell(strings.Join(strings.Fields(item.text), " "), 80))
+		}
+		b.WriteString("\n^S steer · /queue run · /queue clear")
+		m.addInfo(b.String())
+		return nil
+	default:
+		m.addError("Usage: /queue [clear|run]")
+		return nil
+	}
 }
 
 func (m *Model) cmdModel(args string) tea.Cmd {

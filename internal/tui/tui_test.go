@@ -1267,6 +1267,9 @@ func TestLayoutColumnAlignment(t *testing.T) {
 		m := newTestModel(t, Options{})
 		m.width = 140
 		m.height = 30
+		// Hide the inspector so its model label cannot shadow the status bar
+		// in the single-column alignment check.
+		m.sidebarHidden = true
 		typeText(t, m, "hello")
 		view := m.View()
 		editorLine := lineContaining(view, "hello")
@@ -1288,6 +1291,7 @@ func TestLayoutColumnAlignment(t *testing.T) {
 		m.st = newStyles(false)
 		m.width = 140
 		m.height = 30
+		m.sidebarHidden = true
 		typeText(t, m, "hello")
 		view := m.View()
 		boxLine := lineContaining(view, "╭")
@@ -1592,7 +1596,9 @@ func TestSubagentsLiveInSidebarAndFocusCycles(t *testing.T) {
 		t.Fatalf("sidebar missing live sub-agents:\n%s", view)
 	}
 	agentLine := lineContaining(view, "find the parser")
-	if leadingSpaces(agentLine) <= m.leftPaneWidth() {
+	// The welcome emblem means the left pane can begin with non-space art on
+	// the same row, so compare the text's column to the pane edge directly.
+	if strings.Index(agentLine, "find the parser") <= m.leftPaneWidth() {
 		t.Fatalf("sub-agent rendered in the chat pane instead of the sidebar:\n%s", view)
 	}
 
@@ -1636,6 +1642,170 @@ func TestTodosRenderInSidebar(t *testing.T) {
 	for _, want := range []string{"TODOS (1/3)", "read the files", "write the code", "ship it"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("sidebar todos missing %q:\n%s", want, view)
+		}
+	}
+}
+
+func newSteerableModel(t *testing.T) (*Model, *agent.Agent) {
+	t.Helper()
+	ag := agent.New(agent.Options{Config: config.Default()})
+	m := newTestModel(t, Options{Agent: ag})
+	m.baseCtx = context.Background()
+	return m, ag
+}
+
+func TestMessageQueueingAndAutoDispatch(t *testing.T) {
+	m, _ := newSteerableModel(t)
+	m.running = true
+
+	submitText(t, m, "first queued prompt")
+	if m.ed.Value() != "" {
+		t.Fatalf("editor not cleared after queueing: %q", m.ed.Value())
+	}
+	submitText(t, m, "second queued prompt")
+	if len(m.queued) != 2 {
+		t.Fatalf("queue length = %d, want 2", len(m.queued))
+	}
+	if m.queued[0].text != "first queued prompt" || m.queued[1].text != "second queued prompt" {
+		t.Fatalf("queue is not FIFO: %+v", m.queued)
+	}
+	if strings.Contains(m.View(), "A turn is already running") {
+		t.Fatalf("queueing still rejected with the old warning:\n%s", m.View())
+	}
+
+	view := m.View()
+	for _, want := range []string{"Queued (2)", "first queued prompt", "^S steer", "/queue clear"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("queue strip missing %q:\n%s", want, view)
+		}
+	}
+
+	// A completed turn dispatches the first queued message automatically.
+	m.Update(turnDoneMsg{result: &agent.TurnResult{StopReason: agent.StopComplete}})
+	if len(m.queued) != 1 {
+		t.Fatalf("queue length after dispatch = %d, want 1", len(m.queued))
+	}
+	if m.queued[0].text != "second queued prompt" {
+		t.Fatalf("wrong message left in queue: %+v", m.queued)
+	}
+	if !m.running {
+		t.Fatal("auto-dispatched turn did not start")
+	}
+	if !strings.Contains(m.View(), "Queued (1)") {
+		t.Fatalf("queue strip not updated after dispatch:\n%s", m.View())
+	}
+}
+
+func TestCtrlSSteersAndPromotesQueuedMessage(t *testing.T) {
+	m, ag := newSteerableModel(t)
+	m.running = true
+
+	// Direct steer from editor text.
+	typeText(t, m, "focus on tests")
+	press(t, m, tea.KeyCtrlS)
+	if got := ag.PendingSteers(); got != 1 {
+		t.Fatalf("pending steers = %d, want 1", got)
+	}
+	if m.ed.Value() != "" {
+		t.Fatalf("editor not cleared after steering: %q", m.ed.Value())
+	}
+	if !strings.Contains(m.View(), "Steered: focus on tests") {
+		t.Fatalf("steering not shown in transcript:\n%s", m.View())
+	}
+
+	// Empty editor promotes the first queued message instead.
+	m.queueMessage("queued steer", nil)
+	press(t, m, tea.KeyCtrlS)
+	if len(m.queued) != 0 {
+		t.Fatalf("queue not drained by promotion: %+v", m.queued)
+	}
+	if got := ag.PendingSteers(); got != 2 {
+		t.Fatalf("pending steers after promotion = %d, want 2", got)
+	}
+	if !strings.Contains(m.View(), "Steered: queued steer") {
+		t.Fatalf("promoted steer not shown:\n%s", m.View())
+	}
+
+	// The agent's matching steer event must not duplicate the local entry.
+	m.Update(agentEventMsg{event: agent.Event{Type: agent.EventSteer, Text: "queued steer"}})
+	if n := strings.Count(m.View(), "Steered: queued steer"); n != 1 {
+		t.Fatalf("steer entry rendered %d times, want 1:\n%s", n, m.View())
+	}
+}
+
+func TestQueueClearAndCancelPreservesQueue(t *testing.T) {
+	m, _ := newSteerableModel(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	m.running = true
+	m.turnCtx = ctx
+	m.cancel = cancel
+
+	m.queueMessage("one", nil)
+	m.queueMessage("two", nil)
+	submitText(t, m, "/queue clear")
+	if len(m.queued) != 0 {
+		t.Fatalf("/queue clear left %d item(s)", len(m.queued))
+	}
+	if !strings.Contains(m.View(), "Cleared 2 queued") {
+		t.Fatalf("/queue clear confirmation missing:\n%s", m.View())
+	}
+
+	// Ctrl+C must cancel without auto-starting the surviving queue.
+	m.queueMessage("keep me", nil)
+	press(t, m, tea.KeyCtrlC)
+	if m.running {
+		t.Fatal("turn still running after Ctrl+C")
+	}
+	if len(m.queued) != 1 || m.queued[0].text != "keep me" {
+		t.Fatalf("cancel did not preserve the queue: %+v", m.queued)
+	}
+	cancelledView := m.View()
+	if !strings.Contains(cancelledView, "1 queued") || !strings.Contains(cancelledView, "/queue run") {
+		t.Fatalf("cancel message missing queue hint:\n%s", cancelledView)
+	}
+
+	// A late cancellation result must not dispatch the held item either.
+	m.Update(turnDoneMsg{err: context.Canceled})
+	if len(m.queued) != 1 {
+		t.Fatalf("cancelled turn auto-dispatched the queue: %+v", m.queued)
+	}
+	if m.running {
+		t.Fatal("cancelled turn restarted from the queue")
+	}
+}
+
+func TestWelcomeTernEmblemAndNoColor(t *testing.T) {
+	m := newTestModel(t, Options{})
+	view := m.View()
+	for _, line := range ternEmblem {
+		if !strings.Contains(view, strings.TrimSpace(line)) {
+			t.Fatalf("welcome view missing emblem line %q:\n%s", line, view)
+		}
+	}
+	if strings.Contains(view, "\x1b[") {
+		t.Fatalf("welcome view contains ANSI under NO_COLOR:\n%q", view)
+	}
+
+	// Tiny terminals omit the emblem rather than clipping it.
+	m.width = 30
+	m.height = 15
+	m.dirty = true
+	small := m.View()
+	if strings.Contains(small, "_..---'") {
+		t.Fatalf("emblem rendered on a tiny terminal:\n%s", small)
+	}
+
+	// NO_COLOR still strips styles even when color was explicitly requested.
+	t.Setenv("NO_COLOR", "1")
+	plain := newTestModel(t, Options{})
+	plain.st = newStyles(noColor(false))
+	styled := plain.View()
+	if strings.Contains(styled, "\x1b[") {
+		t.Fatalf("NO_COLOR view contains ANSI sequences:\n%q", styled)
+	}
+	for _, line := range ternEmblem {
+		if !strings.Contains(styled, strings.TrimSpace(line)) {
+			t.Fatalf("NO_COLOR welcome missing emblem line %q:\n%s", line, styled)
 		}
 	}
 }

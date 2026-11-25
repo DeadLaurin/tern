@@ -70,6 +70,21 @@ type agentBlock struct {
 	view subagent.AgentView
 }
 
+// queuedMessage is a prompt held back while a turn is running. Attachments are
+// captured at submit time so pasting an image and pressing Enter never loses
+// the image while the queue waits.
+type queuedMessage struct {
+	text        string
+	attachments []provider.ContentPart
+}
+
+// steerer is the small capability the TUI needs from the agent to inject a
+// mid-turn steering message. Using an interface keeps the TUI decoupled from
+// the concrete agent implementation.
+type steerer interface {
+	Steer(string) bool
+}
+
 type approvalState struct {
 	parent   *agent.ApprovalRequest
 	sub      *subagent.ApprovalRequest
@@ -135,6 +150,16 @@ type Model struct {
 	turnCtx   context.Context
 	cancel    context.CancelFunc
 	turnStart time.Time
+
+	// queued holds prompts submitted while a turn is running. They are
+	// dispatched FIFO as turns complete. holdQueue suppresses exactly one
+	// auto-dispatch when the user cancels a turn with Ctrl+C so queued work is
+	// preserved until they explicitly run or clear it.
+	queued    []queuedMessage
+	holdQueue bool
+	// pendingSteers remembers steering messages shown locally so the matching
+	// agent "steer" event is not rendered twice.
+	pendingSteers []string
 
 	spinnerFrame int
 	usingTools   bool
@@ -296,6 +321,10 @@ func (m *Model) handleKey(msg tea.KeyMsg) tea.Cmd {
 	}
 	if m.pendingAsk != nil {
 		return m.handleAskKey(msg)
+	}
+	if msg.Type == tea.KeyCtrlS || (msg.Alt && msg.Type == tea.KeyRunes && strings.EqualFold(string(msg.Runes), "s")) {
+		m.handleSteerKey()
+		return nil
 	}
 	if m.agentsPanel {
 		return m.handleAgentsPanelKey(msg)
@@ -525,8 +554,16 @@ func (m *Model) handleCtrlC() tea.Cmd {
 		m.flushPending()
 		m.curAssistant = nil
 		m.curReasoning = nil
-		m.addInfo("Turn cancelled.")
-		m.statusMsg = "Cancelled"
+		if len(m.queued) > 0 {
+			// Keep the queue intact: the user cancelled on purpose and should
+			// choose when the next prompt runs.
+			m.holdQueue = true
+			m.addInfo(fmt.Sprintf("Turn cancelled (%d queued · /queue run or /queue clear)", len(m.queued)))
+			m.statusMsg = fmt.Sprintf("Cancelled · %d queued", len(m.queued))
+		} else {
+			m.addInfo("Turn cancelled.")
+			m.statusMsg = "Cancelled"
+		}
 		m.quitArmed = false
 		m.dirty = true
 		return nil
@@ -554,7 +591,89 @@ func (m *Model) submit() tea.Cmd {
 	if strings.HasPrefix(text, "/") && !strings.Contains(text, "\n") {
 		return m.handleSlash(text, attachments)
 	}
+	if m.running {
+		m.queueMessage(text, attachments)
+		return nil
+	}
 	return m.startTurn(text, attachments)
+}
+
+// queueMessage appends a prompt to the FIFO queue shown above the editor.
+func (m *Model) queueMessage(text string, attachments []provider.ContentPart) {
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return
+	}
+	m.queued = append(m.queued, queuedMessage{text: text, attachments: attachments})
+	m.statusMsg = fmt.Sprintf("%d queued · ^S steer", len(m.queued))
+	m.dirty = true
+}
+
+// dequeueAndStart removes the first queued prompt and starts its turn.
+func (m *Model) dequeueAndStart() tea.Cmd {
+	if len(m.queued) == 0 {
+		return nil
+	}
+	next := m.queued[0]
+	m.queued = m.queued[1:]
+	m.dirty = true
+	return m.startTurn(next.text, next.attachments)
+}
+
+// steerRunning injects text into the active turn. It reports whether the steer
+// was accepted.
+func (m *Model) steerRunning(text string) bool {
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return false
+	}
+	if !m.running {
+		m.statusMsg = "Nothing to steer · start a turn first"
+		m.dirty = true
+		return false
+	}
+	if m.opts.Agent == nil {
+		m.addError("No agent configured.")
+		return false
+	}
+	s, ok := any(m.opts.Agent).(steerer)
+	if !ok {
+		m.addError("Steering is not supported by this agent.")
+		return false
+	}
+	if !s.Steer(text) {
+		m.addError("Could not steer the running turn.")
+		return false
+	}
+	m.addInfo("↳ Steered: " + text)
+	m.pendingSteers = append(m.pendingSteers, text)
+	m.statusMsg = "Steered the running turn"
+	m.dirty = true
+	return true
+}
+
+// handleSteerKey implements Ctrl+S / Alt+S: steer with the editor text, or
+// promote the first queued message when the editor is empty.
+func (m *Model) handleSteerKey() {
+	if text := strings.TrimSpace(m.ed.Value()); text != "" {
+		if m.steerRunning(text) {
+			m.ed.AddHistory(text)
+			m.ed.Reset()
+		}
+		return
+	}
+	if len(m.queued) == 0 {
+		m.statusMsg = "Nothing to steer · type a message or queue one"
+		m.dirty = true
+		return
+	}
+	next := m.queued[0]
+	if !m.steerRunning(next.text) {
+		return
+	}
+	m.queued = m.queued[1:]
+	m.statusMsg = fmt.Sprintf("Steered queued message · %d left", len(m.queued))
+	m.dirty = true
 }
 
 func (m *Model) startTurn(text string, attachments []provider.ContentPart) tea.Cmd {
@@ -563,7 +682,7 @@ func (m *Model) startTurn(text string, attachments []provider.ContentPart) tea.C
 		return nil
 	}
 	if m.running {
-		m.addInfo("A turn is already running. Press Ctrl+C to cancel it.")
+		m.queueMessage(text, attachments)
 		return nil
 	}
 	base := m.baseCtx
@@ -642,6 +761,18 @@ func (m *Model) handleTurnDone(msg turnDoneMsg) {
 	m.curAssistant = nil
 	m.curReasoning = nil
 	m.dirty = true
+
+	cancelled := errors.Is(msg.err, context.Canceled) ||
+		errors.Is(msg.err, context.DeadlineExceeded) ||
+		(msg.result != nil && msg.result.StopReason == agent.StopCancelled)
+	if m.holdQueue {
+		// A Ctrl+C cancellation already told the user the queue is held.
+		m.holdQueue = false
+		return
+	}
+	if !cancelled && len(m.queued) > 0 {
+		m.dequeueAndStart()
+	}
 }
 
 func (m *Model) handleAgentEvent(ev agent.Event) {
@@ -649,6 +780,24 @@ func (m *Model) handleAgentEvent(ev agent.Event) {
 	case agent.EventTurnStart:
 		m.running = true
 		m.followTail = true
+		m.dirty = true
+
+	case agent.EventSteer:
+		text := strings.TrimSpace(ev.Text)
+		if text == "" {
+			return
+		}
+		// Steering initiated from this UI is already in the transcript.
+		for i, pending := range m.pendingSteers {
+			if pending == text {
+				m.pendingSteers = append(m.pendingSteers[:i], m.pendingSteers[i+1:]...)
+				m.statusMsg = "Steered the running turn"
+				m.dirty = true
+				return
+			}
+		}
+		m.addInfo("↳ Steered: " + text)
+		m.statusMsg = "Steered the running turn"
 		m.dirty = true
 
 	case agent.EventReasoningDelta:
@@ -953,6 +1102,9 @@ func (m *Model) View() string {
 	if agentView != "" {
 		bottom = append(bottom, m.layoutBlock(agentView))
 	}
+	if queueView := m.queueStripView(); queueView != "" {
+		bottom = append(bottom, m.layoutBlock(queueView))
+	}
 	bottom = append(bottom, m.layoutBlock(editorView))
 
 	used := 0
@@ -982,6 +1134,9 @@ func (m *Model) twoPaneView() string {
 	bottom := make([]string, 0, 3)
 	if strings.TrimSpace(m.statusMsg) != "" {
 		bottom = append(bottom, m.st.paint(m.st.dim, m.statusMsg))
+	}
+	if queueView := m.queueStripView(); queueView != "" {
+		bottom = append(bottom, queueView)
 	}
 	bottom = append(bottom, m.editorBoxView(), m.statusView())
 
@@ -1056,6 +1211,9 @@ func (m *Model) layoutBlock(block string) string {
 
 // editorBoxView renders the input inside a subtle full-column rounded box.
 // The prompt is left-aligned inside the box so typing never moves the frame.
+// mainWidth is retained as an alias for the workspace measure.
+func (m *Model) mainWidth() int { return m.contentWidth() }
+
 func (m *Model) editorBoxView() string {
 	colW := m.contentWidth()
 	if m.st.plain {
@@ -1072,8 +1230,37 @@ func (m *Model) editorBoxView() string {
 	return box
 }
 
-// mainWidth is retained as an alias for the workspace measure.
-func (m *Model) mainWidth() int { return m.contentWidth() }
+// queueStripView is a calm, two-line summary of prompts waiting behind the
+// active turn. It deliberately uses only muted text so it reads as metadata,
+// never as another panel.
+func (m *Model) queueStripView() string {
+	if len(m.queued) == 0 {
+		return ""
+	}
+	preview := func(s string) string {
+		s = strings.Join(strings.Fields(s), " ")
+		return truncateCell(s, 32)
+	}
+	shown := m.queued
+	if len(shown) > 2 {
+		shown = shown[:2]
+	}
+	items := make([]string, 0, len(shown))
+	for i, item := range shown {
+		items = append(items, fmt.Sprintf("%d. \"%s\"", i+1, preview(item.text)))
+	}
+	head := fmt.Sprintf("Queued (%d):  %s", len(m.queued), strings.Join(items, "  ·  "))
+	hint := "^S steer  ·  /queue clear"
+	if len(m.queued) > len(shown) {
+		hint = fmt.Sprintf("+%d more  ·  %s", len(m.queued)-len(shown), hint)
+	}
+	width := m.contentWidth()
+	lines := []string{
+		m.st.paint(m.st.dim, truncateCell(head, width)),
+		m.st.paint(m.st.dim, truncateCell(hint, width)),
+	}
+	return strings.Join(lines, "\n")
+}
 
 // centerBlock horizontally centers a rendered block inside the terminal. It is
 // used only for modal cards; the transcript/editor/status column uses the
@@ -1163,16 +1350,37 @@ func (m *Model) renderWelcome() string {
 	}
 	dim := func(text string) string { return m.st.paint(m.st.dim, text) }
 	key := func(text string) string { return m.st.paint(m.st.info, text) }
-	lines := []string{
+	lines := make([]string, 0, 16)
+	// The emblem is a quiet silhouette: omit it on terminals too short or too
+	// narrow to show it without clipping.
+	if m.height >= 18 && m.width >= 34 {
+		for _, line := range ternEmblem {
+			lines = append(lines, m.st.paint(m.st.quote, line))
+		}
+		lines = append(lines, "")
+	}
+	lines = append(lines,
 		m.st.paint(m.st.heading, "tern"),
 		m.st.paint(m.st.accent, modelLabel),
 		"",
-		dim(key("Ctrl+P") + dim(" model  ·  ") + key("Shift+Tab") + dim(" effort  ·  ") + key("/help") + dim(" commands")),
-	}
+		dim(key("Ctrl+P")+dim(" model  ·  ")+key("Shift+Tab")+dim(" effort  ·  ")+key("/help")+dim(" commands")),
+	)
 	if !m.st.plain {
 		return lipgloss.PlaceHorizontal(m.mainWidth(), lipgloss.Center, strings.Join(lines, "\n"))
 	}
 	return strings.Join(lines, "\n")
+}
+
+// ternEmblem is the compact soaring-tern silhouette shown above the banner.
+// It is pure ASCII so NO_COLOR and plain sessions stay ANSI- and Unicode-free.
+var ternEmblem = []string{
+	" \\`.                  .'/",
+	"  \\ `-.            .-' /",
+	"   \\   `-.      .-'   /",
+	"    `-.   `.  .'   .-'",
+	"       `-.  \\/  .-'",
+	"   _..---'`----'`---.._",
+	"  `---..__      __..---'>",
 }
 
 func (m *Model) renderEntry(entry *transcriptEntry) string {
@@ -1437,9 +1645,18 @@ func (m *Model) runningStatus() string {
 		speed = " · " + formatTokensPerSec(m.liveSpeed)
 	}
 	if m.usingTools {
-		return frame + " Running tools… " + elapsed + speed
+		return frame + " Running tools… " + elapsed + speed + m.queueStatusSuffix()
 	}
-	return frame + " Thinking… " + elapsed + speed
+	return frame + " Thinking… " + elapsed + speed + m.queueStatusSuffix()
+}
+
+// queueStatusSuffix keeps the live status aware of waiting prompts without
+// crowding the spinner line.
+func (m *Model) queueStatusSuffix() string {
+	if len(m.queued) == 0 {
+		return ""
+	}
+	return fmt.Sprintf(" · %d queued · ^S steer", len(m.queued))
 }
 
 func (m *Model) activeAgentCount() int {

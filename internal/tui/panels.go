@@ -1495,6 +1495,8 @@ func (m *Model) helpItems() []helpItem {
 		{name: "sessions", usage: "/sessions [query]", detail: "browse, resume, fork, rename or delete sessions"},
 		{name: "agents", usage: "/agents", detail: "inspect or cancel sub-agents"},
 		{name: "compact", usage: "/compact [text]", detail: "summarize older context", takesArgs: true},
+		{name: "steer", usage: "/steer <text>", detail: "steer the running turn (Ctrl+S), or start a turn when idle", takesArgs: true},
+		{name: "queue", usage: "/queue [clear|run]", detail: "show queued prompts, clear them, or run the next one", takesArgs: true},
 		{name: "cost", usage: "/cost", detail: "show token usage and estimated cost"},
 		{name: "context", usage: "/context", detail: "show context window usage"},
 		{name: "fork", usage: "/fork [name]", detail: "fork the current session transcript", takesArgs: true},
@@ -1612,7 +1614,7 @@ func (m *Model) helpModalView() string {
 	if end < len(m.modal.helpItems) {
 		b.WriteString(m.st.paint(m.st.dim, fmt.Sprintf("  … %d below\n", len(m.modal.helpItems)-end)))
 	}
-	b.WriteString("\n" + m.st.paint(m.st.dim, "Keys  Ctrl+P model · Shift+Tab effort · Ctrl+T details · Ctrl+O agents · Ctrl+B sidebar · Ctrl+C cancel/quit"))
+	b.WriteString("\n" + m.st.paint(m.st.dim, "Keys  Ctrl+S steer · Ctrl+P model · Shift+Tab effort · Ctrl+T details · Ctrl+O agents · Ctrl+B sidebar · Ctrl+C cancel/quit"))
 	current := m.modal.helpItems[m.modal.index]
 	footer := current.usage + " — " + current.detail + " · ↑/↓ scroll · enter run · esc close"
 	return m.modalFrame("Help", strings.TrimRight(b.String(), "\n"), footer)
