@@ -30,6 +30,7 @@ const (
 	modalStats
 	modalSkills
 	modalMCP
+	modalHelp
 )
 
 var reasoningEfforts = []string{"none", "low", "high", "max"}
@@ -49,6 +50,15 @@ type modalSession struct {
 	CostUSD   float64
 	Duration  time.Duration
 	UpdatedAt time.Time
+}
+
+// helpItem is one selectable row in the interactive /help modal. Commands
+// whose usage takes an argument pre-fill the editor instead of executing.
+type helpItem struct {
+	name      string
+	usage     string
+	detail    string
+	takesArgs bool
 }
 
 type modalState struct {
@@ -78,6 +88,8 @@ type modalState struct {
 	skillPreview string
 
 	mcp []ext.MCPStatus
+
+	helpItems []helpItem
 }
 
 func (m *Model) setModal(kind modalKind) {
@@ -105,6 +117,8 @@ func (m *Model) handleModalKey(msg tea.KeyMsg) tea.Cmd {
 		return m.handleSkillsModalKey(msg)
 	case modalMCP:
 		return m.handleMCPModalKey(msg)
+	case modalHelp:
+		return m.handleHelpModalKey(msg)
 	}
 	return nil
 }
@@ -184,6 +198,15 @@ func (m *Model) handleModelModalKey(msg tea.KeyMsg) tea.Cmd {
 	case tea.KeyEnter:
 		m.applyModelModal()
 		return nil
+	case tea.KeyRunes:
+		// 1-4 pick an effort level immediately without leaving the modal.
+		if len(msg.Runes) == 1 {
+			if n := int(msg.Runes[0] - '1'); n >= 0 && n < len(reasoningEfforts) {
+				m.modal.effort = reasoningEfforts[n]
+				m.dirty = true
+				return nil
+			}
+		}
 	}
 	return nil
 }
@@ -215,17 +238,42 @@ func (m *Model) cycleEffort(delta int) {
 	m.dirty = true
 }
 
+// cycleReasoningEffort changes the live effort level from the main view
+// (Shift+Tab) and reports it briefly in the status line.
+func (m *Model) cycleReasoningEffort(delta int) {
+	current := ""
+	if m.opts.Config != nil {
+		current = strings.TrimSpace(m.opts.Config.ReasoningEffort)
+	}
+	index := 2 // default to high when unset or unknown
+	if !containsString(reasoningEfforts, current) {
+		index = 2
+	}
+	for i, effort := range reasoningEfforts {
+		if effort == current {
+			index = i
+			break
+		}
+	}
+	index = (index + delta + len(reasoningEfforts)) % len(reasoningEfforts)
+	level := reasoningEfforts[index]
+	m.applyReasoningEffort(level)
+	m.statusMsg = "Reasoning effort: " + level
+}
+
 func (m *Model) applyModelModal() {
-	if len(m.modal.models) == 0 {
+	effort := m.modal.effort
+	if len(m.modal.models) > 0 {
+		selected := m.modal.models[m.modal.index]
+		m.applyModel(selected.name)
 		m.closeModal()
+		m.applyReasoningEffort(effort)
+		m.addInfo(fmt.Sprintf("Model set to %s (%s).", selected.name, effort))
 		return
 	}
-	selected := m.modal.models[m.modal.index]
-	effort := m.modal.effort
-	m.applyModel(selected.name)
-	m.applyReasoningEffort(effort)
 	m.closeModal()
-	m.addInfo(fmt.Sprintf("Model set to %s (%s).", selected.name, effort))
+	m.applyReasoningEffort(effort)
+	m.addInfo("Reasoning effort set to " + effort + ".")
 }
 
 func (m *Model) applyModel(name string) {
@@ -270,7 +318,6 @@ func (m *Model) applyReasoningEffort(effort string) {
 	}
 	m.dirty = true
 }
-
 func (m *Model) modelModalView() string {
 	var b strings.Builder
 	current := ""
@@ -319,23 +366,23 @@ func (m *Model) modelModalView() string {
 		b.WriteString(m.st.paint(m.st.dim, fmt.Sprintf("  … %d below\n", len(m.modal.models)-end)))
 	}
 	b.WriteString("\n")
-	b.WriteString(m.st.paint(m.st.accent, "reasoning effort  "))
+	b.WriteString(m.st.paint(m.st.accent, "Reasoning: "))
 	for i, effort := range reasoningEfforts {
 		if i > 0 {
-			b.WriteString(m.st.paint(m.st.dim, " · "))
+			b.WriteString(" ")
 		}
 		if effort == m.modal.effort {
-			b.WriteString(m.st.paint(m.st.selected, "["+effort+"]"))
+			b.WriteString(m.st.paint(m.st.selected, "[ ● "+effort+" ]"))
 		} else {
-			b.WriteString(m.st.paint(m.st.dim, effort))
+			b.WriteString(m.st.paint(m.st.dim, "[ "+effort+" ]"))
 		}
 	}
-	b.WriteString(m.st.paint(m.st.dim, "   ←/→ or tab cycles"))
+	b.WriteString(m.st.paint(m.st.dim, "   ←/→ · tab · 1-4 pick   enter save"))
 	if m.modal.notice != "" {
 		b.WriteString("\n" + m.st.paint(m.st.amber, m.modal.notice))
 	}
 	return m.modalFrame("Model", strings.TrimRight(b.String(), "\n"),
-		"↑/↓ select · ←/→ effort · enter apply · esc close")
+		"↑/↓ select · ←/→ effort · 1-4 pick · enter apply · esc close")
 }
 
 func compactContext(window int) string {
@@ -877,11 +924,11 @@ func (m *Model) handleStatsModalKey(msg tea.KeyMsg) tea.Cmd {
 		m.clampStatsIndex()
 		return nil
 	case tea.KeyPgUp:
-		m.modal.index -= m.modalRowLimit()
+		m.modal.index -= 5
 		m.clampStatsIndex()
 		return nil
 	case tea.KeyPgDown:
-		m.modal.index += m.modalRowLimit()
+		m.modal.index += 5
 		m.clampStatsIndex()
 		return nil
 	case tea.KeyEnter:
@@ -930,39 +977,74 @@ func (m *Model) statsModalView() string {
 	}
 	s := m.modal.stats
 	var b strings.Builder
-	cachePct := int(s.CacheHitRate*100 + 0.5)
-	fmt.Fprintf(&b, "%s  total sessions: %d · sub-agents: %d · turns: %d · active time: %s\n",
-		m.st.paint(m.st.accent, "Lifetime"),
-		s.SessionCount, s.SubagentCount, s.TurnCount, compactDuration(s.TotalDuration))
-	fmt.Fprintf(&b, "Total Tokens %s · %s input · %s cache hit · %s cache miss · %s output · %s reasoning\n",
-		compactTokens(s.TotalUsage.TotalTokens),
-		compactTokens(s.TotalUsage.PromptTokens),
-		compactTokens(s.TotalUsage.PromptCacheHitTokens),
-		compactTokens(s.TotalUsage.PromptCacheMissTokens),
-		compactTokens(s.TotalUsage.CompletionTokens),
-		compactTokens(s.TotalUsage.ReasoningTokens))
-	fmt.Fprintf(&b, "Cache hit %d%% · average %s · total estimated cost $%.4f\n",
-		cachePct, formatTokensPerSec(s.AvgTokensPerSec), s.TotalCostUSD)
 
-	if len(s.Models) > 0 {
-		b.WriteString("\n" + m.st.paint(m.st.bold, "Models") + "\n")
+	// 1-line KPI strip.
+	fmt.Fprintf(&b, "%s %d  %s %d  %s %s  %s %s  %s %s  %s $%.3f\n",
+		m.st.paint(m.st.dim, "Sessions"), s.SessionCount,
+		m.st.paint(m.st.dim, "Turns"), s.TurnCount,
+		m.st.paint(m.st.dim, "Tokens"), compactTokens(s.TotalUsage.TotalTokens),
+		m.st.paint(m.st.dim, "Active"), compactDuration(s.TotalDuration),
+		m.st.paint(m.st.dim, "Avg"), formatTokensPerSec(s.AvgTokensPerSec),
+		m.st.paint(m.st.dim, "Cost"), s.TotalCostUSD)
+
+	// Cache hit gauge: exactly 20 cells.
+	cachePct := s.CacheHitRate * 100
+	b.WriteString(m.st.paint(m.st.dim, "Cache   "))
+	b.WriteString(m.st.paint(m.st.sage, barGauge(s.CacheHitRate, 20)))
+	fmt.Fprintf(&b, "  %s\n", m.st.paint(m.st.accent, fmt.Sprintf("%.1f%%", cachePct)))
+
+	// Token volume and speed sparklines over recent sessions (oldest -> newest).
+	series := recentStatsRows(s.Sessions, 24)
+	volumes := make([]float64, 0, len(series))
+	speeds := make([]float64, 0, len(series))
+	for _, row := range series {
+		volumes = append(volumes, float64(row.Usage.TotalTokens))
+		speeds = append(speeds, row.AvgTokensPerSec)
+	}
+	b.WriteString(m.st.paint(m.st.dim, "Activity ") + " " + m.st.paint(m.st.accent, sparkline(volumes, 12)) + "\n")
+	b.WriteString(m.st.paint(m.st.dim, "Speed    ") + " " + m.st.paint(m.st.teal, sparkline(speeds, 12)) + "\n")
+
+	// Compact model usage bars (one line per model, capped).
+	b.WriteString(m.st.paint(m.st.bold, "Models") + "\n")
+	if len(s.Models) == 0 {
+		b.WriteString(m.st.paint(m.st.dim, "  no model usage recorded") + "\n")
+	} else {
+		maxTokens := 1
 		for _, model := range s.Models {
-			fmt.Fprintf(&b, "  %-18s %3d sessions %4d turns %8s  %s  $%.4f\n",
-				truncateCell(model.Model, 18), model.Sessions, model.Turns,
-				compactTokens(model.Usage.TotalTokens),
-				formatTokensPerSec(model.AvgTokensPerSec), model.CostUSD)
+			if model.Usage.TotalTokens > maxTokens {
+				maxTokens = model.Usage.TotalTokens
+			}
+		}
+		limit := len(s.Models)
+		if limit > 3 {
+			limit = 3
+		}
+		for _, model := range s.Models[:limit] {
+			width := 0
+			if maxTokens > 0 {
+				width = int(float64(model.Usage.TotalTokens)/float64(maxTokens)*10 + 0.5)
+			}
+			bar := strings.Repeat("█", width) + strings.Repeat("░", 10-width)
+			fmt.Fprintf(&b, "  %-14s %s %8s  %s\n",
+				truncateCell(model.Model, 14), m.st.paint(m.st.accent, bar),
+				compactTokens(model.Usage.TotalTokens), m.st.paint(m.st.dim, fmt.Sprintf("$%.3f", model.CostUSD)))
+		}
+		if len(s.Models) > limit {
+			// The count keeps the dashboard compact without an extra row.
+			fmt.Fprintf(&b, "  %s\n", m.st.paint(m.st.dim, fmt.Sprintf("(%d more models not shown)", len(s.Models)-limit)))
 		}
 	}
 
-	b.WriteString("\n" + m.st.paint(m.st.bold, "Session log") + " " + m.st.paint(m.st.dim, "(newest first)") + "\n")
+	// Recent sessions, capped at five rows with a highlighted selection.
+	recentHeader := "Recent"
+	if len(s.Sessions) > 5 {
+		recentHeader = fmt.Sprintf("Recent (%d of %d)", 5, len(s.Sessions))
+	}
+	b.WriteString(m.st.paint(m.st.bold, recentHeader) + " " + m.st.paint(m.st.dim, "(enter resumes)") + "\n")
 	if len(s.Sessions) == 0 {
-		b.WriteString(m.st.paint(m.st.dim, "  No sessions recorded yet."))
+		b.WriteString(m.st.paint(m.st.dim, "  no sessions recorded yet"))
 	} else {
-		limit := m.modalRowLimit()
-		start, end := windowRange(len(s.Sessions), m.modal.index, limit)
-		if start > 0 {
-			b.WriteString(m.st.paint(m.st.dim, fmt.Sprintf("  … %d above\n", start)))
-		}
+		start, end := windowRange(len(s.Sessions), m.modal.index, 5)
 		activeID := ""
 		if m.opts.Session != nil {
 			activeID = m.opts.Session.ID()
@@ -986,22 +1068,84 @@ func (m *Model) statsModalView() string {
 			if strings.TrimSpace(name) == "" {
 				name = row.ID
 			}
-			line := fmt.Sprintf("%s%s %-22s %-14s %2dt %3dm %7s $%.3f %s",
-				marker, active, truncateCell(name, 22), truncateCell(row.Model, 14),
-				row.Turns, row.Messages, compactTokens(row.Usage.TotalTokens),
-				row.CostUSD, compactDuration(row.Duration))
+			line := fmt.Sprintf("%s%s %-20s %-12s %2dt %7s $%.3f %s",
+				marker, active, truncateCell(name, 20), truncateCell(row.Model, 12),
+				row.Turns, compactTokens(row.Usage.TotalTokens), row.CostUSD, compactDuration(row.Duration))
 			b.WriteString(m.st.paint(style, truncateCell(line, maxInt(30, m.modalTextWidth()))))
 			b.WriteString("\n")
 		}
-		if end < len(s.Sessions) {
-			b.WriteString(m.st.paint(m.st.dim, fmt.Sprintf("  … %d below\n", len(s.Sessions)-end)))
-		}
 	}
 	if m.modal.notice != "" {
-		b.WriteString("\n" + m.st.paint(m.st.amber, m.modal.notice))
+		b.WriteString(m.st.paint(m.st.amber, m.modal.notice))
 	}
 	return m.modalFrame("Usage & activity", strings.TrimRight(b.String(), "\n"),
-		"↑/↓ scroll · enter resume session · esc close")
+		"↑/↓ highlight · enter resume · esc close")
+}
+
+func recentStatsRows(rows []session.SessionStatRow, limit int) []session.SessionStatRow {
+	if len(rows) == 0 || limit <= 0 {
+		return nil
+	}
+	if len(rows) > limit {
+		rows = rows[:limit]
+	}
+	out := make([]session.SessionStatRow, len(rows))
+	for i, row := range rows {
+		out[len(rows)-1-i] = row
+	}
+	return out
+}
+
+// barGauge renders a proportional filled bar with the given number of cells.
+func barGauge(ratio float64, width int) string {
+	if width <= 0 {
+		return ""
+	}
+	if ratio < 0 {
+		ratio = 0
+	}
+	if ratio > 1 {
+		ratio = 1
+	}
+	filled := int(ratio*float64(width) + 0.5)
+	return strings.Repeat("█", filled) + strings.Repeat("░", width-filled)
+}
+
+var sparkRunes = []rune("▁▂▃▄▅▆▇█")
+
+// sparkline renders values as a compact left-to-right activity strip. Short
+// series are left-padded with the lowest glyph so the shape stays readable.
+func sparkline(values []float64, minWidth int) string {
+	if minWidth < 1 {
+		minWidth = 1
+	}
+	if len(values) == 0 {
+		return strings.Repeat(string(sparkRunes[0]), minWidth)
+	}
+	maxValue := 0.0
+	for _, value := range values {
+		if value > maxValue {
+			maxValue = value
+		}
+	}
+	var b strings.Builder
+	if len(values) < minWidth {
+		b.WriteString(strings.Repeat(string(sparkRunes[0]), minWidth-len(values)))
+	}
+	for _, value := range values {
+		idx := 0
+		if maxValue > 0 && value > 0 {
+			idx = int(value/maxValue*float64(len(sparkRunes)-1) + 0.5)
+			if idx < 0 {
+				idx = 0
+			}
+			if idx >= len(sparkRunes) {
+				idx = len(sparkRunes) - 1
+			}
+		}
+		b.WriteRune(sparkRunes[idx])
+	}
+	return b.String()
 }
 
 // ---------------------------------------------------------------------------
@@ -1330,6 +1474,151 @@ func (m *Model) mcpModalView() string {
 }
 
 // ---------------------------------------------------------------------------
+// Interactive help
+// ---------------------------------------------------------------------------
+
+func (m *Model) openHelpModal() {
+	m.setModal(modalHelp)
+	m.modal.helpItems = m.helpItems()
+	m.modal.index = 0
+	m.statusMsg = "Help"
+}
+
+func (m *Model) helpItems() []helpItem {
+	items := []helpItem{
+		{name: "help", usage: "/help", detail: "show this interactive command reference"},
+		{name: "model", usage: "/model [name]", detail: "open the model + effort selector or switch model directly"},
+		{name: "effort", usage: "/effort <none|low|high|max>", detail: "set reasoning effort immediately", takesArgs: true},
+		{name: "thinking", usage: "/thinking <none|low|high|max>", detail: "alias for /effort", takesArgs: true},
+		{name: "plan", usage: "/plan", detail: "toggle read-only plan mode"},
+		{name: "stats", usage: "/stats", detail: "visual usage and activity monitor"},
+		{name: "sessions", usage: "/sessions [query]", detail: "browse, resume, fork, rename or delete sessions"},
+		{name: "agents", usage: "/agents", detail: "inspect or cancel sub-agents"},
+		{name: "compact", usage: "/compact [text]", detail: "summarize older context", takesArgs: true},
+		{name: "cost", usage: "/cost", detail: "show token usage and estimated cost"},
+		{name: "context", usage: "/context", detail: "show context window usage"},
+		{name: "fork", usage: "/fork [name]", detail: "fork the current session transcript", takesArgs: true},
+		{name: "name", usage: "/name <name>", detail: "rename the current session", takesArgs: true},
+		{name: "export", usage: "/export [md|html] [path]", detail: "export the session transcript", takesArgs: true},
+		{name: "rewind", usage: "/rewind [turn]", detail: "list turns or restore the state before a turn", takesArgs: true},
+		{name: "skills", usage: "/skills [name]", detail: "browse skills or show one directly"},
+		{name: "mcp", usage: "/mcp", detail: "MCP servers, tools and reconnect"},
+		{name: "config", usage: "/config", detail: "show the effective configuration"},
+		{name: "clear", usage: "/clear", detail: "clear the transcript view"},
+		{name: "undo", usage: "/undo", detail: "restore files from the latest checkpoint"},
+		{name: "quit", usage: "/quit", detail: "exit tern"},
+	}
+	sort.Slice(items, func(i, j int) bool { return items[i].name < items[j].name })
+	for _, cmd := range m.commands {
+		detail := cmd.Description
+		if detail == "" {
+			detail = cmd.Path
+		}
+		items = append(items, helpItem{name: cmd.Name, usage: "/" + cmd.Name, detail: detail})
+	}
+	return items
+}
+
+func (m *Model) handleHelpModalKey(msg tea.KeyMsg) tea.Cmd {
+	switch msg.Type {
+	case tea.KeyEsc, tea.KeyCtrlC:
+		m.closeModal()
+		return nil
+	case tea.KeyUp:
+		m.modal.index--
+		m.clampHelpIndex()
+		return nil
+	case tea.KeyDown:
+		m.modal.index++
+		m.clampHelpIndex()
+		return nil
+	case tea.KeyPgUp:
+		m.modal.index -= 8
+		m.clampHelpIndex()
+		return nil
+	case tea.KeyPgDown:
+		m.modal.index += 8
+		m.clampHelpIndex()
+		return nil
+	case tea.KeyEnter:
+		if len(m.modal.helpItems) == 0 {
+			m.closeModal()
+			return nil
+		}
+		item := m.modal.helpItems[m.modal.index]
+		m.closeModal()
+		if item.name == "help" {
+			m.openHelpModal()
+			return nil
+		}
+		if item.takesArgs {
+			m.ed.SetValue("/" + item.name + " ")
+			m.statusMsg = item.usage
+			return nil
+		}
+		return m.handleSlash("/"+item.name, nil)
+	}
+	return nil
+}
+
+func (m *Model) clampHelpIndex() {
+	n := len(m.modal.helpItems)
+	if n == 0 {
+		m.modal.index = 0
+		return
+	}
+	if m.modal.index < 0 {
+		m.modal.index = n - 1
+	}
+	if m.modal.index >= n {
+		m.modal.index = 0
+	}
+}
+
+func (m *Model) helpModalView() string {
+	if len(m.modal.helpItems) == 0 {
+		return m.modalFrame("Help", "No commands available.", "esc close")
+	}
+	m.clampHelpIndex()
+	var b strings.Builder
+	b.WriteString(m.st.paint(m.st.bold, "Commands") + "\n")
+	limit := m.height - 12
+	if limit < 12 {
+		limit = 12
+	}
+	if limit > len(m.modal.helpItems) {
+		limit = len(m.modal.helpItems)
+	}
+	start, end := windowRange(len(m.modal.helpItems), m.modal.index, limit)
+	if start > 0 {
+		b.WriteString(m.st.paint(m.st.dim, fmt.Sprintf("  … %d above\n", start)))
+	}
+	width := maxInt(30, m.modalTextWidth())
+	for i := start; i < end; i++ {
+		item := m.modal.helpItems[i]
+		marker := "  "
+		style := m.st.dim
+		if i == m.modal.index {
+			marker = "▸ "
+			style = m.st.selected
+			if m.st.plain {
+				marker = "> "
+			}
+		}
+		line := fmt.Sprintf("%s%-15s %s", marker, "/"+item.name, item.detail)
+		b.WriteString(m.st.paint(style, truncateCell(line, width)))
+		b.WriteString("\n")
+	}
+	if end < len(m.modal.helpItems) {
+		b.WriteString(m.st.paint(m.st.dim, fmt.Sprintf("  … %d below\n", len(m.modal.helpItems)-end)))
+	}
+	b.WriteString("\n" + m.st.paint(m.st.dim, "Keys  Ctrl+P model · Shift+Tab effort · Ctrl+T details · Ctrl+O agents · Ctrl+C cancel/quit"))
+	current := m.modal.helpItems[m.modal.index]
+	footer := current.usage + " — " + current.detail + " · ↑/↓ scroll · enter run · esc close"
+	return m.modalFrame("Help", strings.TrimRight(b.String(), "\n"), footer)
+}
+
+// ---------------------------------------------------------------------------
 // Modal frame and helpers
 // ---------------------------------------------------------------------------
 
@@ -1345,6 +1634,8 @@ func (m *Model) modalView() string {
 		return m.skillsModalView()
 	case modalMCP:
 		return m.mcpModalView()
+	case modalHelp:
+		return m.helpModalView()
 	}
 	return ""
 }

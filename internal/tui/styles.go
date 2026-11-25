@@ -18,21 +18,22 @@ func noColor(explicit bool) bool {
 	return set
 }
 
-// The palette is deliberately muted and cohesive (Tokyo-Night/Slate inspired)
-// so long sessions stay calm instead of shouting in the terminal's brightest
-// 16 ANSI colours.
+// The palette is deliberately calm and low-contrast (slate-inspired) so long
+// sessions stay comfortable instead of shouting in the terminal's brightest
+// 16 ANSI colours. There is one restrained accent and three quiet semantic
+// tints; everything else is a legible neutral.
 const (
-	colorAccent  = "#7AA2F7" // soft indigo
-	colorTeal    = "#73DACA" // muted teal
-	colorSage    = "#9ECE6A" // soft sage
-	colorAmber   = "#E0AF68" // warm amber
-	colorCoral   = "#F7768E" // soft coral
-	colorText    = "#C0CAF5" // soft text
-	colorMuted   = "#A9B1D6" // secondary text
-	colorSubtle  = "#565F89" // muted slate
-	colorSurface = "#1F2335" // subtle surface
-	colorPanel   = "#24283B" // raised surface
-	colorBorder  = "#3B4261" // subtle border
+	colorAccent  = "#7AA2F7" // single restrained accent
+	colorTeal    = "#7AA2F7" // legacy alias for the accent
+	colorSage    = "#86C79A" // quiet success / sage
+	colorAmber   = "#E0B870" // quiet warning / amber
+	colorCoral   = "#E07A88" // quiet error / rose
+	colorText    = "#E2E8F0" // primary text
+	colorMuted   = "#94A3B8" // secondary text
+	colorSubtle  = "#64748B" // dim text
+	colorSurface = "#181C24" // subtle elevated bar / modal surface
+	colorPanel   = "#181C24" // raised surface
+	colorBorder  = "#2D3343" // hairline border
 )
 
 // styles bundles every style used by the TUI. When plain is true all helpers

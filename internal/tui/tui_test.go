@@ -490,9 +490,13 @@ func TestCustomSlashCommandDispatch(t *testing.T) {
 func TestStatusBarFormat(t *testing.T) {
 	m := newTestModel(t, Options{GitBranch: "main"})
 	view := m.View()
-	want := "deepseek-flash (high) | ask | 0.0 tok/s | ctx 0% | cache 0% | $0.000 | main"
+	// Idle zero segments (tok/s, ctx, cache, cost) are omitted for calmness.
+	want := "deepseek-flash (high) | ask | main"
 	if !strings.Contains(view, want) {
 		t.Fatalf("status bar missing %q:\n%s", want, view)
+	}
+	if strings.Contains(view, "0.0 tok/s") || strings.Contains(view, "$0.000") {
+		t.Fatalf("status bar should omit idle zero segments:\n%s", view)
 	}
 }
 
@@ -841,10 +845,18 @@ func TestStatsModalRenderingAndResume(t *testing.T) {
 		t.Fatal("/stats did not open the usage modal")
 	}
 	view := m.View()
-	for _, want := range []string{"Usage & activity", "Lifetime", "Token", "Cache hit", "Session log", "stats session"} {
+	for _, want := range []string{"Usage & activity", "Sessions", "Turns", "Tokens", "Cache", "Activity", "Speed", "Models", "Recent", "stats session"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("stats view missing %q:\n%s", want, view)
 		}
+	}
+	for _, want := range []string{"█", "░", "▁"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("stats view missing visual gauge/sparkline %q:\n%s", want, view)
+		}
+	}
+	if lines := strings.Count(view, "\n"); lines > 22 {
+		t.Fatalf("stats view too tall (%d lines):\n%s", lines, view)
 	}
 	press(t, m, tea.KeyEnter)
 	if m.opts.Session == nil || m.opts.Session.ID() != sess.ID() {
@@ -915,7 +927,7 @@ func TestMCPPanelEmptyAndConfigured(t *testing.T) {
 	})
 }
 
-func TestNoColorModalOutputIsANSIAndUnicodeFree(t *testing.T) {
+func TestNoColorModalOutputIsANSIFree(t *testing.T) {
 	t.Setenv("NO_COLOR", "1")
 	store, dir := newSessionStore(t)
 	if _, err := store.Create(session.SessionMeta{Name: "plain session", Model: "deepseek-flash", WorkDir: dir}); err != nil {
@@ -927,11 +939,6 @@ func TestNoColorModalOutputIsANSIAndUnicodeFree(t *testing.T) {
 		view := m.View()
 		if strings.Contains(view, "\x1b[") {
 			t.Fatalf("%s view contains ANSI escapes: %q", command, view)
-		}
-		for _, r := range view {
-			if r > 127 {
-				t.Fatalf("%s view contains non-ASCII rune %q", command, r)
-			}
 		}
 		press(t, m, tea.KeyEsc)
 		if m.activeModal != modalNone {
@@ -965,5 +972,278 @@ func sessionUsage(prompt, completion, hit, miss int) provider.Usage {
 		TotalTokens:           prompt + completion,
 		PromptCacheHitTokens:  hit,
 		PromptCacheMissTokens: miss,
+	}
+}
+
+func TestShiftTabCyclesReasoningEffort(t *testing.T) {
+	m := newTestModel(t, Options{})
+	m.opts.Config.ReasoningEffort = "high"
+	m.opts.Agent.Config.ReasoningEffort = "high"
+
+	press(t, m, tea.KeyShiftTab)
+	if got := m.opts.Config.ReasoningEffort; got != "max" {
+		t.Fatalf("effort after shift+tab = %q, want max", got)
+	}
+	if got := m.opts.Agent.ReasoningEffort(); got != "max" {
+		t.Fatalf("agent effort after shift+tab = %q, want max", got)
+	}
+	if !strings.Contains(m.View(), "Reasoning effort: max") {
+		t.Fatalf("status bar missing effort update:\n%s", m.View())
+	}
+
+	press(t, m, tea.KeyShiftTab)
+	if got := m.opts.Config.ReasoningEffort; got != "none" {
+		t.Fatalf("effort after wrapping = %q, want none", got)
+	}
+}
+
+func TestEffortCommandSetsLiveEffort(t *testing.T) {
+	m := newTestModel(t, Options{})
+	submitText(t, m, "/effort low")
+	if got := m.opts.Config.ReasoningEffort; got != "low" {
+		t.Fatalf("config effort = %q, want low", got)
+	}
+	if got := m.opts.Agent.ReasoningEffort(); got != "low" {
+		t.Fatalf("agent effort = %q, want low", got)
+	}
+	if !strings.Contains(m.View(), "Reasoning effort set to low") {
+		t.Fatalf("effort confirmation missing:\n%s", m.View())
+	}
+
+	submitText(t, m, "/thinking max")
+	if got := m.opts.Agent.ReasoningEffort(); got != "max" {
+		t.Fatalf("/thinking effort = %q, want max", got)
+	}
+
+	submitText(t, m, "/effort nope")
+	if !strings.Contains(m.View(), "expected one of") {
+		t.Fatalf("invalid effort not reported:\n%s", m.View())
+	}
+}
+
+func TestModelModalEffortNumberKeysAndEnter(t *testing.T) {
+	m := newTestModel(t, Options{})
+	m.opts.Config.ReasoningEffort = "high"
+	press(t, m, tea.KeyCtrlP)
+	if m.activeModal != modalModel {
+		t.Fatal("model selector did not open")
+	}
+	if !strings.Contains(m.View(), "Reasoning:") {
+		t.Fatalf("effort pill row missing:\n%s", m.View())
+	}
+	pressRune(t, m, "1")
+	if m.modal.effort != "none" {
+		t.Fatalf("number key effort = %q, want none", m.modal.effort)
+	}
+	press(t, m, tea.KeyEnter)
+	if m.activeModal != modalNone {
+		t.Fatal("enter did not close the model selector")
+	}
+	if got := m.opts.Config.ReasoningEffort; got != "none" {
+		t.Fatalf("effort after enter = %q, want none", got)
+	}
+
+	// Arrow keys pick the next level and Enter saves it.
+	press(t, m, tea.KeyCtrlP)
+	press(t, m, tea.KeyRight)
+	press(t, m, tea.KeyEnter)
+	if got := m.opts.Agent.ReasoningEffort(); got != "low" {
+		t.Fatalf("effort after arrow = %q, want low", got)
+	}
+}
+
+func TestHelpModalHighlightAndDispatch(t *testing.T) {
+	m := newTestModel(t, Options{})
+	submitText(t, m, "/help")
+	if m.activeModal != modalHelp {
+		t.Fatal("/help did not open the interactive help modal")
+	}
+	view := m.View()
+	for _, want := range []string{"Commands", "effort", "model", "Shift+Tab"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("help modal missing %q:\n%s", want, view)
+		}
+	}
+	if m.modal.index != 0 {
+		t.Fatalf("help index = %d, want 0", m.modal.index)
+	}
+	press(t, m, tea.KeyDown)
+	if m.modal.index != 1 {
+		t.Fatalf("help index after down = %d, want 1", m.modal.index)
+	}
+	press(t, m, tea.KeyUp)
+	if m.modal.index != 0 {
+		t.Fatalf("help index after up = %d, want 0", m.modal.index)
+	}
+
+	// Enter on an argument-taking command pre-fills the editor.
+	m.modal.index = indexOfHelpItem(t, m, "effort")
+	press(t, m, tea.KeyEnter)
+	if m.activeModal != modalNone {
+		t.Fatal("help did not close after enter")
+	}
+	if got := m.ed.Value(); got != "/effort " {
+		t.Fatalf("pre-filled editor = %q, want /effort ", got)
+	}
+
+	// Enter on a zero-arg command runs it immediately.
+	m.ed.Reset()
+	submitText(t, m, "/help")
+	m.modal.index = indexOfHelpItem(t, m, "model")
+	press(t, m, tea.KeyEnter)
+	if m.activeModal != modalModel {
+		t.Fatal("enter on /model did not open the model selector")
+	}
+}
+
+func indexOfHelpItem(t *testing.T, m *Model, name string) int {
+	t.Helper()
+	for i, item := range m.modal.helpItems {
+		if item.name == name {
+			return i
+		}
+	}
+	t.Fatalf("help item %q not found", name)
+	return 0
+}
+
+func TestStatsSparklineAndGaugeHelpers(t *testing.T) {
+	gauge := barGauge(0.5, 20)
+	if len([]rune(gauge)) != 20 {
+		t.Fatalf("gauge length = %d, want 20", len([]rune(gauge)))
+	}
+	if !strings.Contains(gauge, "█") || !strings.Contains(gauge, "░") {
+		t.Fatalf("gauge missing filled/empty cells: %q", gauge)
+	}
+	line := sparkline([]float64{0, 1, 2, 3, 4, 5, 6, 7}, 12)
+	if !strings.ContainsAny(line, string(sparkRunes)) {
+		t.Fatalf("sparkline has no spark glyphs: %q", line)
+	}
+	if len([]rune(line)) != 12 {
+		t.Fatalf("sparkline length = %d, want 12", len([]rune(line)))
+	}
+}
+
+func TestApprovalQueueIsFIFO(t *testing.T) {
+	m := newTestModel(t, Options{})
+	first := make(chan approvalResult, 1)
+	second := make(chan approvalResult, 1)
+	third := make(chan approvalResult, 1)
+	m.Update(approvalRequestMsg{request: &approvalState{
+		parent:   &agent.ApprovalRequest{ToolName: "bash", Command: "one"},
+		response: first,
+	}})
+	m.Update(approvalRequestMsg{request: &approvalState{
+		parent:   &agent.ApprovalRequest{ToolName: "bash", Command: "two"},
+		response: second,
+	}})
+	m.Update(approvalRequestMsg{request: &approvalState{
+		parent:   &agent.ApprovalRequest{ToolName: "edit", Command: "three"},
+		response: third,
+	}})
+	if len(m.approvalQueue) != 2 {
+		t.Fatalf("approval queue length = %d, want 2", len(m.approvalQueue))
+	}
+	if !strings.Contains(m.View(), "1 of 3") {
+		t.Fatalf("approval header missing queue position:\n%s", m.View())
+	}
+	if got := m.pendingApproval.parent.Command; got != "one" {
+		t.Fatalf("pending approval = %q, want one", got)
+	}
+
+	pressRune(t, m, "y")
+	select {
+	case result := <-first:
+		if !result.allow {
+			t.Fatal("first approval was denied, want allow")
+		}
+	default:
+		t.Fatal("first approval response missing")
+	}
+	if m.pendingApproval == nil || m.pendingApproval.parent.Command != "two" {
+		t.Fatalf("next approval = %+v, want two", m.pendingApproval)
+	}
+	if len(m.approvalQueue) != 1 {
+		t.Fatalf("approval queue length = %d, want 1", len(m.approvalQueue))
+	}
+
+	pressRune(t, m, "n")
+	select {
+	case result := <-second:
+		if result.allow {
+			t.Fatal("second approval was allowed, want deny")
+		}
+	default:
+		t.Fatal("second approval response missing")
+	}
+	if m.pendingApproval == nil || m.pendingApproval.parent.Command != "three" {
+		t.Fatalf("third approval not promoted: %+v", m.pendingApproval)
+	}
+	pressRune(t, m, "y")
+	select {
+	case result := <-third:
+		if !result.allow {
+			t.Fatal("third approval was denied, want allow")
+		}
+	default:
+		t.Fatal("third approval response missing")
+	}
+	if m.pendingApproval != nil || len(m.approvalQueue) != 0 {
+		t.Fatal("approval queue did not drain")
+	}
+}
+
+func TestApprovalAllowAllForTurn(t *testing.T) {
+	m := newTestModel(t, Options{})
+	m.running = true
+	channels := make([]chan approvalResult, 3)
+	for i := range channels {
+		channels[i] = make(chan approvalResult, 1)
+		req := &agent.ApprovalRequest{ToolName: "bash", Command: "cmd"}
+		m.Update(approvalRequestMsg{request: &approvalState{parent: req, response: channels[i]}})
+	}
+	if len(m.approvalQueue) != 2 {
+		t.Fatalf("approval queue length = %d, want 2", len(m.approvalQueue))
+	}
+	pressRune(t, m, "a")
+	if !m.turnAutoApprove {
+		t.Fatal("pressing a did not enable allow-all for the turn")
+	}
+	for i, ch := range channels {
+		select {
+		case result := <-ch:
+			if !result.allow {
+				t.Fatalf("approval %d was denied, want allow", i)
+			}
+		default:
+			t.Fatalf("approval %d response missing", i)
+		}
+	}
+	if m.pendingApproval != nil || len(m.approvalQueue) != 0 {
+		t.Fatal("allow-all did not drain the queue")
+	}
+
+	// Subsequent requests in the same turn are approved without prompting.
+	next := make(chan approvalResult, 1)
+	m.Update(approvalRequestMsg{request: &approvalState{
+		parent:   &agent.ApprovalRequest{ToolName: "bash"},
+		response: next,
+	}})
+	select {
+	case result := <-next:
+		if !result.allow {
+			t.Fatal("subsequent approval was denied, want allow")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("subsequent approval was not auto-approved")
+	}
+	if m.pendingApproval != nil {
+		t.Fatal("auto-approved request should not be displayed")
+	}
+
+	// The flag is cleared at the end of the turn.
+	m.Update(turnDoneMsg{})
+	if m.turnAutoApprove {
+		t.Fatal("turnAutoApprove was not cleared at turn end")
 	}
 }

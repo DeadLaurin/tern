@@ -13,6 +13,7 @@ import (
 
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 
 	"github.com/tern-agent/tern/internal/agent"
 	terncontext "github.com/tern-agent/tern/internal/context"
@@ -137,6 +138,14 @@ type Model struct {
 	statusMsg string
 
 	pendingApproval *approvalState
+	// approvalQueue holds requests that arrived while another approval was on
+	// screen. It is strictly FIFO so concurrent sub-agents never overwrite or
+	// jump ahead of one another.
+	approvalQueue []*approvalState
+	// turnAutoApprove is set by pressing 'a' in the approval prompt. It lasts
+	// until the current turn ends and silently approves every remaining and
+	// subsequent request for that turn.
+	turnAutoApprove bool
 	pendingAsk      *askState
 
 	commands []terncontext.SlashCommand
@@ -209,10 +218,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case approvalRequestMsg:
 		m.flushPending()
-		m.pendingApproval = msg.request
-		m.statusMsg = "Waiting for approval"
-		m.dirty = true
-		m.followTail = true
+		m.enqueueApproval(msg.request)
 		return m, nil
 
 	case askUserMsg:
@@ -284,6 +290,10 @@ func (m *Model) handleKey(msg tea.KeyMsg) tea.Cmd {
 	}
 	if msg.Type == tea.KeyCtrlO {
 		m.toggleAgentFocus()
+		return nil
+	}
+	if msg.Type == tea.KeyShiftTab {
+		m.cycleReasoningEffort(1)
 		return nil
 	}
 	if msg.Type == tea.KeyEsc {
@@ -413,6 +423,7 @@ func (m *Model) handleCtrlC() tea.Cmd {
 		}
 		m.cancel = nil
 		m.running = false
+		m.turnAutoApprove = false
 		m.flushPending()
 		m.curAssistant = nil
 		m.curReasoning = nil
@@ -474,6 +485,7 @@ func (m *Model) startTurn(text string, attachments []provider.ContentPart) tea.C
 	m.outputRunes = 0
 	m.speedStart = time.Time{}
 	m.liveSpeed = 0
+	m.turnAutoApprove = false
 	m.statusMsg = "Thinking…"
 	m.ctxTokens += len(text) / 4
 
@@ -494,6 +506,7 @@ func (m *Model) handleTurnDone(msg turnDoneMsg) {
 	m.flushPending()
 	m.running = false
 	m.usingTools = false
+	m.turnAutoApprove = false
 	if m.cancel != nil {
 		m.cancel()
 		m.cancel = nil
@@ -804,7 +817,8 @@ func (m *Model) View() string {
 	m.flushPending()
 	m.rebuildContent()
 
-	editorView := m.ed.View(m.width, m.st)
+	layoutWidth := m.mainWidth()
+	editorView := m.ed.View(layoutWidth, m.st)
 	todoView := m.todoView()
 	agentView := m.agentsView()
 	statusView := m.statusView()
@@ -825,15 +839,15 @@ func (m *Model) View() string {
 
 	bottom := make([]string, 0, 5)
 	if strings.TrimSpace(m.statusMsg) != "" {
-		bottom = append(bottom, m.st.paint(m.st.dim, m.statusMsg))
+		bottom = append(bottom, m.centerBlock(m.st.paint(m.st.dim, m.statusMsg)))
 	}
 	if todoView != "" {
-		bottom = append(bottom, todoView)
+		bottom = append(bottom, m.centerBlock(todoView))
 	}
 	if agentView != "" {
-		bottom = append(bottom, agentView)
+		bottom = append(bottom, m.centerBlock(agentView))
 	}
-	bottom = append(bottom, editorView)
+	bottom = append(bottom, m.centerBlock(editorView))
 	bottom = append(bottom, statusView)
 
 	used := 0
@@ -844,17 +858,41 @@ func (m *Model) View() string {
 	if height < 1 {
 		height = 1
 	}
-	m.viewport.Width = maxInt(20, m.width)
+	m.viewport.Width = layoutWidth
 	m.viewport.Height = height
 	if mainView != "" {
-		// Modals replace the transcript area.
-		return m.finishView(strings.Join(append([]string{mainView}, bottom...), "\n"))
+		// Modals replace the transcript area and are centered horizontally.
+		return m.finishView(strings.Join(append([]string{m.centerBlock(mainView)}, bottom...), "\n"))
 	}
 	if m.followTail {
 		m.viewport.GotoBottom()
 	}
-	mainView = m.viewport.View()
+	mainView = m.centerBlock(m.viewport.View())
 	return m.finishView(strings.Join(append([]string{mainView}, bottom...), "\n"))
+}
+
+// mainWidth is the width of the centered workspace column. On wide terminals
+// the transcript and editor stay in a comfortable measure instead of stretching
+// every line across the whole screen.
+func (m *Model) mainWidth() int {
+	if m.width > 100 {
+		width := m.width - 4
+		if width > 98 {
+			width = 98
+		}
+		return width
+	}
+	return maxInt(20, m.width)
+}
+
+// centerBlock horizontally centers a rendered block inside the terminal. It is
+// a no-op on narrow terminals and in plain mode, where padding is unnecessary
+// and keeping output compact matters more.
+func (m *Model) centerBlock(block string) string {
+	if block == "" || m.st.plain || m.width <= 100 {
+		return block
+	}
+	return lipgloss.PlaceHorizontal(m.width, lipgloss.Center, block)
 }
 
 func (m *Model) finishView(view string) string {
@@ -930,46 +968,24 @@ func (m *Model) renderWelcome() string {
 	}
 	modelLabel := model
 	if effort != "" {
-		modelLabel += " (" + effort + ")"
+		modelLabel += " · " + effort
 	}
-	cwd := m.opts.WorkDir
-	if cwd == "" {
-		cwd = "."
-	}
-	branch := strings.TrimSpace(m.opts.GitBranch)
-	if branch == "" {
-		branch = "no-branch"
-	}
-	sep := "  ·  "
 	dim := func(text string) string { return m.st.paint(m.st.dim, text) }
 	key := func(text string) string { return m.st.paint(m.st.info, text) }
 	lines := []string{
-		m.st.paint(m.st.heading, "tern") + dim("  "+version),
-		dim("An interactive coding agent."),
+		m.st.paint(m.st.heading, "tern"),
+		m.st.paint(m.st.accent, modelLabel),
 		"",
-		dim("model   ") + m.st.paint(m.st.accent, modelLabel),
-		dim("cwd     ") + m.st.paint(m.st.teal, cwd),
-		dim("branch  ") + m.st.paint(m.st.sage, branch),
-		"",
-		key("/model") + dim(" or ") + key("Ctrl+P") + dim(" switch model") + sep +
-			key("/sessions") + dim(" resume") + sep + key("/stats") + dim(" usage"),
-		key("/skills") + dim(" inspect") + sep + key("/mcp") + dim(" servers") + sep +
-			key("/help") + dim(" all commands"),
+		dim(key("Ctrl+P") + dim(" model  ·  ") + key("Shift+Tab") + dim(" effort  ·  ") + key("/help") + dim(" commands")),
 	}
 	if !m.st.plain {
-		bar := m.st.paint(m.st.userAccent, "┃")
-		for i, line := range lines {
-			if i == 0 {
-				continue
-			}
-			lines[i] = bar + " " + line
-		}
+		return lipgloss.PlaceHorizontal(m.mainWidth(), lipgloss.Center, strings.Join(lines, "\n"))
 	}
 	return strings.Join(lines, "\n")
 }
 
 func (m *Model) renderEntry(entry *transcriptEntry) string {
-	width := maxInt(20, m.width-2)
+	width := maxInt(20, m.mainWidth()-2)
 	switch entry.kind {
 	case entryUser:
 		marker := "❯ "
@@ -1109,27 +1125,27 @@ func (m *Model) statusView() string {
 	} else if m.opts.Config != nil && m.opts.Config.PermissionMode != "" {
 		mode = m.opts.Config.PermissionMode
 	}
-	ctxPct := 0
-	if m.ctxWindow > 0 {
-		ctxPct = int(float64(m.ctxTokens) / float64(m.ctxWindow) * 100)
+	parts := []string{modelLabel, mode}
+	if speed := m.speed(); speed > 0 {
+		parts = append(parts, formatTokensPerSec(speed))
+	}
+	if m.ctxWindow > 0 && m.ctxTokens > 0 {
+		ctxPct := int(float64(m.ctxTokens) / float64(m.ctxWindow) * 100)
 		if ctxPct < 0 {
 			ctxPct = 0
 		}
+		parts = append(parts, fmt.Sprintf("ctx %d%%", ctxPct))
 	}
-	cachePct := int(m.cache*100 + 0.5)
-	branch := strings.TrimSpace(m.opts.GitBranch)
-	if branch == "" {
-		branch = "no-branch"
+	if m.cache > 0 {
+		parts = append(parts, fmt.Sprintf("cache %d%%", int(m.cache*100+0.5)))
 	}
-	text := m.st.statusSegments(
-		modelLabel,
-		mode,
-		formatTokensPerSec(m.speed()),
-		fmt.Sprintf("ctx %d%%", ctxPct),
-		fmt.Sprintf("cache %d%%", cachePct),
-		fmt.Sprintf("$%.3f", m.totalCost),
-		branch,
-	)
+	if m.totalCost > 0 {
+		parts = append(parts, fmt.Sprintf("$%.3f", m.totalCost))
+	}
+	if branch := strings.TrimSpace(m.opts.GitBranch); branch != "" {
+		parts = append(parts, branch)
+	}
+	text := m.st.statusSegments(parts...)
 	if m.st.plain {
 		return text
 	}

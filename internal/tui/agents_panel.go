@@ -45,8 +45,12 @@ func (m *Model) agentsView() string {
 		body += "\n" + m.st.paint(m.st.dim, "Tab/Ctrl+O next · Esc return · c cancel · C cancel all")
 	}
 	lines := strings.Split(body, "\n")
-	if len(lines) > 16 {
-		lines = append(lines[:15], m.st.paint(m.st.dim, fmt.Sprintf("… %d more agent lines", len(lines)-15)))
+	limit := 8
+	if m.agentsOpen {
+		limit = 18
+	}
+	if len(lines) > limit {
+		lines = append(lines[:limit-1], m.st.paint(m.st.dim, fmt.Sprintf("… %d more agent lines (Tab to expand)", len(lines)-limit+1)))
 	}
 	return strings.Join(lines, "\n")
 }
@@ -214,6 +218,10 @@ func (m *Model) handleApprovalKey(msg tea.KeyMsg) tea.Cmd {
 		case "n":
 			m.resolveApproval(false)
 			return nil
+		case "a":
+			m.turnAutoApprove = true
+			m.resolveApproval(true)
+			return nil
 		}
 		return nil
 	case tea.KeyEnter:
@@ -226,6 +234,41 @@ func (m *Model) handleApprovalKey(msg tea.KeyMsg) tea.Cmd {
 	return nil
 }
 
+// enqueueApproval keeps concurrent approval requests in a strict FIFO queue.
+// A request can never overwrite the one currently on screen.
+func (m *Model) enqueueApproval(state *approvalState) {
+	if state == nil {
+		return
+	}
+	if m.turnAutoApprove {
+		m.deliverApproval(state, true)
+		m.statusMsg = "Auto-approved for this turn"
+		m.dirty = true
+		return
+	}
+	if m.pendingApproval != nil {
+		m.approvalQueue = append(m.approvalQueue, state)
+		m.statusMsg = fmt.Sprintf("Waiting for approval (%d queued)", len(m.approvalQueue))
+		m.dirty = true
+		m.followTail = true
+		return
+	}
+	m.pendingApproval = state
+	m.statusMsg = "Waiting for approval"
+	m.dirty = true
+	m.followTail = true
+}
+
+func (m *Model) deliverApproval(state *approvalState, allow bool) {
+	if state == nil {
+		return
+	}
+	select {
+	case state.response <- approvalResult{allow: allow}:
+	default:
+	}
+}
+
 func (m *Model) resolveApproval(allow bool) {
 	state := m.pendingApproval
 	m.pendingApproval = nil
@@ -236,17 +279,33 @@ func (m *Model) resolveApproval(allow bool) {
 		} else if state.sub != nil {
 			tool = state.sub.ToolName
 		}
-		select {
-		case state.response <- approvalResult{allow: allow}:
-		default:
-		}
+		m.deliverApproval(state, allow)
 		if allow {
 			m.addInfo("Approved " + tool + ".")
 		} else {
 			m.addInfo("Denied " + tool + ".")
 		}
 	}
-	m.statusMsg = "Ready"
+
+	// Drain queued requests when the user opted into allow-all for this turn.
+	if m.turnAutoApprove {
+		if len(m.approvalQueue) > 0 {
+			for _, queued := range m.approvalQueue {
+				m.deliverApproval(queued, true)
+			}
+			m.addInfo(fmt.Sprintf("Auto-approved %d queued approval(s) for this turn.", len(m.approvalQueue)))
+			m.approvalQueue = nil
+		}
+	} else if len(m.approvalQueue) > 0 {
+		m.pendingApproval = m.approvalQueue[0]
+		m.approvalQueue = m.approvalQueue[1:]
+	}
+
+	if m.pendingApproval != nil {
+		m.statusMsg = "Waiting for approval"
+	} else {
+		m.statusMsg = "Ready"
+	}
 	m.dirty = true
 	m.followTail = true
 }
@@ -320,6 +379,10 @@ func (m *Model) approvalView() string {
 	if m.st.plain {
 		title = "! Approval required"
 	}
+	total := 1 + len(m.approvalQueue)
+	if total > 1 {
+		title = fmt.Sprintf("%s (1 of %d)", title, total)
+	}
 	var b strings.Builder
 	b.WriteString(m.st.paint(m.st.warn, title))
 	b.WriteString("\n\n")
@@ -368,6 +431,7 @@ func (m *Model) approvalView() string {
 
 	b.WriteString("\n")
 	b.WriteString(m.st.paint(m.st.success, "y") + m.st.paint(m.st.dim, " allow   ") +
+		m.st.paint(m.st.accent, "a") + m.st.paint(m.st.dim, " allow all for turn   ") +
 		m.st.paint(m.st.error, "n") + m.st.paint(m.st.dim, " deny   ") +
 		m.st.paint(m.st.dim, "esc deny"))
 	return b.String()

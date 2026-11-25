@@ -28,6 +28,7 @@ var builtinCommandNames = []string{
 	"config",
 	"context",
 	"cost",
+	"effort",
 	"export",
 	"fork",
 	"help",
@@ -40,6 +41,7 @@ var builtinCommandNames = []string{
 	"sessions",
 	"skills",
 	"stats",
+	"thinking",
 	"undo",
 }
 
@@ -54,11 +56,14 @@ func (m *Model) handleSlash(line string, attachments []provider.ContentPart) tea
 	name, args := splitCommandLine(line)
 	switch name {
 	case "help":
-		m.addInfo(m.helpText())
+		m.openHelpModal()
 		return nil
 
 	case "model":
 		return m.cmdModel(args)
+
+	case "effort", "thinking":
+		return m.cmdEffort(args)
 
 	case "plan":
 		return m.cmdPlan()
@@ -240,6 +245,25 @@ func (m *Model) cmdModel(args string) tea.Cmd {
 	name := strings.TrimSpace(strings.Fields(args)[0])
 	m.applyModel(name)
 	m.addInfo("Model set to " + name + ".")
+	return nil
+}
+
+// cmdEffort sets the reasoning effort immediately, or opens the model/effort
+// selector when invoked without an argument.
+func (m *Model) cmdEffort(args string) tea.Cmd {
+	level := strings.ToLower(strings.TrimSpace(args))
+	if level == "" {
+		m.openModelModal()
+		m.statusMsg = "Reasoning effort · choose with ←/→ or 1-4"
+		return nil
+	}
+	if !containsString(reasoningEfforts, level) {
+		m.addError("effort: expected one of none, low, high, max")
+		return nil
+	}
+	m.applyReasoningEffort(level)
+	m.statusMsg = "Reasoning effort: " + level
+	m.addInfo("Reasoning effort set to " + level + ".")
 	return nil
 }
 
