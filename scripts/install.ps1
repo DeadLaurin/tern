@@ -17,7 +17,7 @@
     %LOCALAPPDATA%\Programs\tern.
 
 .EXAMPLE
-    irm https://raw.githubusercontent.com/tern-agent/tern/main/scripts/install.ps1 | iex
+    irm https://raw.githubusercontent.com/DeadLaurin/tern/main/scripts/install.ps1 | iex
 
 .EXAMPLE
     .\install.ps1 -Version 1.2.3
@@ -31,7 +31,7 @@ param(
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 
-$Repo = if ($env:TERN_REPO) { $env:TERN_REPO } else { 'tern-agent/tern' }
+$Repo = if ($env:TERN_REPO) { $env:TERN_REPO } else { 'DeadLaurin/tern' }
 $BaseUrl = "https://github.com/$Repo"
 $DownloadsUrl = "$BaseUrl/releases/download"
 

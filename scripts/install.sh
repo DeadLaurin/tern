@@ -2,7 +2,9 @@
 # Install tern from GitHub releases.
 #
 # Usage:
-#   curl -fsSL https://raw.githubusercontent.com/tern-agent/tern/main/scripts/install.sh | sh
+#   curl -fsSL https://raw.githubusercontent.com/DeadLaurin/tern/main/scripts/install.sh | sh
+#   # Or host this file directly on your own site:
+#   curl -fsSL https://yoursite.com/install.sh | sh
 #
 # Environment:
 #   TERN_VERSION      Release version to install (e.g. "1.2.3" or "v1.2.3").
@@ -10,14 +12,14 @@
 #   TERN_INSTALL_DIR  Directory to install the tern binary into.
 #                     Defaults to /usr/local/bin when writable, otherwise
 #                     $HOME/.local/bin.
-#   TERN_REPO         GitHub repository ("owner/name"). Defaults to tern-agent/tern.
+#   TERN_REPO         GitHub repository ("owner/name"). Defaults to DeadLaurin/tern.
 #
 # This script is POSIX sh compatible. It requires curl or wget, tar, and
 # either sha256sum or shasum.
 
 set -eu
 
-REPO="${TERN_REPO:-tern-agent/tern}"
+REPO="${TERN_REPO:-DeadLaurin/tern}"
 BASE_URL="https://github.com/${REPO}"
 DOWNLOADS_URL="${BASE_URL}/releases/download"
 
