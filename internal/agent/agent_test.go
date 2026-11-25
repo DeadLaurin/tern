@@ -10,6 +10,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/tern-agent/tern/internal/config"
 	"github.com/tern-agent/tern/internal/ext"
@@ -1032,5 +1033,204 @@ func TestSwitchSessionPreservesHistoryUsageAndFirstTurnContext(t *testing.T) {
 	}
 	if usage, _ := a.TotalUsage(); usage.CompletionTokens != 2+4 {
 		t.Fatalf("resumed usage = %+v, want cumulative 6 completion tokens", usage)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Answer-text-only speed accounting
+// ---------------------------------------------------------------------------
+
+type pacedEvent struct {
+	delay time.Duration
+	ev    provider.StreamEvent
+}
+
+// pacedProvider emits scripted stream steps with configurable delays so tests
+// can distinguish reasoning, tool, and answer-text phases.
+type pacedProvider struct {
+	turns [][]pacedEvent
+	next  int
+}
+
+func (p *pacedProvider) ModelInfo(model string) provider.ModelCapabilities {
+	return provider.DefaultModelCapabilities(model)
+}
+
+func (p *pacedProvider) Stream(ctx context.Context, _ provider.ChatRequest) (<-chan provider.StreamEvent, error) {
+	if p.next >= len(p.turns) {
+		return nil, fmt.Errorf("paced provider: no script for turn %d", p.next)
+	}
+	script := p.turns[p.next]
+	p.next++
+
+	out := make(chan provider.StreamEvent)
+	go func() {
+		defer close(out)
+		for _, pe := range script {
+			if pe.delay > 0 {
+				select {
+				case <-ctx.Done():
+					return
+				case <-time.After(pe.delay):
+				}
+			}
+			select {
+			case <-ctx.Done():
+				return
+			case out <- pe.ev:
+			}
+		}
+	}()
+	return out, nil
+}
+
+// slowTool is a read-only tool whose execution can be delayed in tests.
+type slowTool struct {
+	delay time.Duration
+}
+
+func (t slowTool) Name() string { return "slow_tool" }
+func (t slowTool) Description() string {
+	return "A test tool that sleeps before returning."
+}
+func (t slowTool) Parameters() json.RawMessage { return json.RawMessage(`{"type":"object"}`) }
+func (t slowTool) IsReadOnly() bool            { return true }
+func (t slowTool) IsWeb() bool                 { return false }
+func (t slowTool) IsParallelSafe() bool        { return true }
+func (t slowTool) Execute(ctx context.Context, _ tools.ExecEnv, _ json.RawMessage) (tools.Result, error) {
+	select {
+	case <-ctx.Done():
+		return tools.Result{}, ctx.Err()
+	case <-time.After(t.delay):
+	}
+	return tools.Result{Output: "slow tool done"}, nil
+}
+
+func TestTokensPerSecZeroForReasoningAndToolCallsOnly(t *testing.T) {
+	workDir := t.TempDir()
+	p := &pacedProvider{turns: [][]pacedEvent{
+		{
+			{delay: 0, ev: provider.StreamEvent{Type: provider.EventReasoningDelta, Text: "thinking about the tool call"}},
+			{delay: 0, ev: provider.StreamEvent{
+				Type:          provider.EventToolCallDelta,
+				ToolCallIndex: 0,
+				ToolCallID:    "call_slow",
+				ToolName:      "slow_tool",
+				ToolArgsDelta: `{}`,
+			}},
+			{delay: 0, ev: provider.StreamEvent{Type: provider.EventUsage, Usage: &provider.Usage{
+				PromptTokens: 10, CompletionTokens: 20, TotalTokens: 30, ReasoningTokens: 20,
+			}}},
+		},
+		{
+			{delay: 0, ev: provider.StreamEvent{Type: provider.EventReasoningDelta, Text: "more private reasoning, still no answer text"}},
+			{delay: 0, ev: provider.StreamEvent{Type: provider.EventUsage, Usage: &provider.Usage{
+				PromptTokens: 12, CompletionTokens: 9, TotalTokens: 21, ReasoningTokens: 9,
+			}}},
+		},
+	}}
+
+	var events []Event
+	a := New(Options{
+		Config:      testConfig(),
+		Provider:    p,
+		Registry:    newRegistry(t),
+		Permissions: yoloPermissions(workDir),
+		WorkDir:     workDir,
+		OnEvent:     func(ev Event) { events = append(events, ev) },
+	})
+	a.Registry.Register(slowTool{delay: 20 * time.Millisecond})
+
+	res, err := a.RunTurn(context.Background(), "call the tool", nil)
+	if err != nil {
+		t.Fatalf("RunTurn: %v", err)
+	}
+	if res.Usage.CompletionTokens == 0 {
+		t.Fatalf("usage = %+v, want non-zero completion tokens to make the zero-speed check meaningful", res.Usage)
+	}
+	if res.TokensPerSec != 0 {
+		t.Fatalf("turn tokens_per_sec = %v, want 0 when only reasoning and tool calls were emitted", res.TokensPerSec)
+	}
+
+	var endEv *Event
+	for i := range events {
+		if events[i].Type == EventTurnEnd {
+			endEv = &events[i]
+		}
+	}
+	if endEv == nil {
+		t.Fatalf("missing turn_end event: %+v", events)
+	}
+	if endEv.TokensPerSec != 0 {
+		t.Fatalf("turn_end tokens_per_sec = %v, want 0", endEv.TokensPerSec)
+	}
+}
+
+func TestTokensPerSecUsesOnlyAnswerTextPhase(t *testing.T) {
+	const textChunk = "abcdefghij" // 10 chars per delta
+	workDir := t.TempDir()
+	p := &pacedProvider{turns: [][]pacedEvent{
+		{
+			{delay: 60 * time.Millisecond, ev: provider.StreamEvent{Type: provider.EventReasoningDelta, Text: "slow reasoning before the tool call"}},
+			{delay: 0, ev: provider.StreamEvent{
+				Type:          provider.EventToolCallDelta,
+				ToolCallIndex: 0,
+				ToolCallID:    "call_slow",
+				ToolName:      "slow_tool",
+				ToolArgsDelta: `{}`,
+			}},
+			{delay: 0, ev: provider.StreamEvent{Type: provider.EventUsage, Usage: &provider.Usage{
+				PromptTokens: 20, CompletionTokens: 15, TotalTokens: 35, ReasoningTokens: 15,
+			}}},
+		},
+		{
+			{delay: 2 * time.Millisecond, ev: provider.StreamEvent{Type: provider.EventTextDelta, Text: textChunk}},
+			{delay: 2 * time.Millisecond, ev: provider.StreamEvent{Type: provider.EventTextDelta, Text: textChunk}},
+			{delay: 2 * time.Millisecond, ev: provider.StreamEvent{Type: provider.EventTextDelta, Text: textChunk}},
+			{delay: 2 * time.Millisecond, ev: provider.StreamEvent{Type: provider.EventTextDelta, Text: textChunk}},
+			{delay: 0, ev: provider.StreamEvent{Type: provider.EventUsage, Usage: &provider.Usage{
+				PromptTokens: 30, CompletionTokens: 10, TotalTokens: 40,
+			}}},
+		},
+	}}
+
+	var events []Event
+	a := New(Options{
+		Config:      testConfig(),
+		Provider:    p,
+		Registry:    newRegistry(t),
+		Permissions: yoloPermissions(workDir),
+		WorkDir:     workDir,
+		OnEvent:     func(ev Event) { events = append(events, ev) },
+	})
+	a.Registry.Register(slowTool{delay: 60 * time.Millisecond})
+
+	res, err := a.RunTurn(context.Background(), "answer after a slow tool", nil)
+	if err != nil {
+		t.Fatalf("RunTurn: %v", err)
+	}
+	if res.Text != strings.Repeat(textChunk, 4) {
+		t.Fatalf("text = %q, want the streamed answer", res.Text)
+	}
+	// Reasoning (~60ms) plus tool execution (~60ms) dominate wall-clock time.
+	// If either leaked into the metric, speed would fall to roughly 10/0.12s.
+	if res.DurationMs < 50 {
+		t.Fatalf("turn duration_ms = %d, want the slow reasoning phase to be observed", res.DurationMs)
+	}
+	if res.TokensPerSec <= 500 {
+		t.Fatalf("turn tokens_per_sec = %v, want answer-text-only speed (reasoning and tool time excluded)", res.TokensPerSec)
+	}
+
+	var endEv *Event
+	for i := range events {
+		if events[i].Type == EventTurnEnd {
+			endEv = &events[i]
+		}
+	}
+	if endEv == nil {
+		t.Fatalf("missing turn_end event: %+v", events)
+	}
+	if endEv.TokensPerSec != res.TokensPerSec {
+		t.Fatalf("turn_end tokens_per_sec = %v, want %v", endEv.TokensPerSec, res.TokensPerSec)
 	}
 }

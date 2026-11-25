@@ -77,6 +77,11 @@ type TurnResult struct {
 	// streamDuration accumulates provider stream time for this turn. It is
 	// unexported because DurationMs is the serialized representation.
 	streamDuration time.Duration
+	// textDuration and textTokens accumulate only the assistant answer-text
+	// phase across steps. Reasoning time and tool execution time are excluded
+	// so TokensPerSec reflects answer-writing speed.
+	textDuration time.Duration
+	textTokens   int
 }
 
 // Options configures a new Agent. All fields are optional except Provider.
@@ -377,6 +382,8 @@ func (a *Agent) RunTurn(ctx context.Context, userInput string, attachments []pro
 			compacted = true
 		}
 		res.streamDuration += sr.Duration
+		res.textDuration += sr.TextDuration
+		res.textTokens += sr.TextTokens
 		if sr.Usage.TotalTokens > 0 || sr.Usage.PromptTokens > 0 || sr.Usage.CompletionTokens > 0 {
 			a.lastPromptTokens = sr.Usage.PromptTokens
 		}
@@ -433,7 +440,7 @@ func (a *Agent) finishTurn(res *TurnResult, turn int, startUsage provider.Usage,
 	res.TotalCostUSD = a.totalCost
 	res.CacheHitRate = cacheHitRate(a.totalUsage)
 	res.DurationMs = durationMillis(res.streamDuration)
-	res.TokensPerSec = tokensPerSec(res.Usage.CompletionTokens, res.streamDuration)
+	res.TokensPerSec = tokensPerSec(res.textTokens, res.textDuration)
 
 	if err != nil {
 		a.emit(Event{Type: EventError, Turn: turn, Message: err.Error(), Reason: string(reason)})
@@ -465,15 +472,56 @@ type streamResult struct {
 	Usage        provider.Usage
 	Duration     time.Duration
 	TokensPerSec float64
+	// TextDuration and TextTokens cover only the assistant answer-text phase
+	// of this step, excluding reasoning and tool-call deltas.
+	TextDuration time.Duration
+	TextTokens   int
 	compacted    bool
 }
 
 // tokensPerSec computes generation speed, guarding against zero values.
-func tokensPerSec(completionTokens int, elapsed time.Duration) float64 {
-	if elapsed <= 0 || completionTokens <= 0 {
+func tokensPerSec(tokenCount int, elapsed time.Duration) float64 {
+	if elapsed <= 0 || tokenCount <= 0 {
 		return 0
 	}
-	return float64(completionTokens) / elapsed.Seconds()
+	return float64(tokenCount) / elapsed.Seconds()
+}
+
+// textPhaseDuration measures the answer-text phase. When only one text delta
+// arrived (or timestamps tie), it falls back to elapsed time since the first
+// delta, with a 1ms floor for any non-empty text.
+func textPhaseDuration(textStart, textEnd time.Time, textChars int) time.Duration {
+	if textChars <= 0 || textStart.IsZero() {
+		return 0
+	}
+	d := textEnd.Sub(textStart)
+	if d <= 0 {
+		d = time.Since(textStart)
+	}
+	if d <= 0 {
+		d = time.Millisecond
+	}
+	return d
+}
+
+// answerTextTokens estimates the number of tokens the model spent writing
+// assistant answer text. Reasoning tokens and tool-call-only steps contribute
+// zero, so they never inflate or dilute the speed metric.
+func answerTextTokens(u provider.Usage, textChars int, hasToolCalls bool) int {
+	if textChars <= 0 {
+		return 0
+	}
+	if u.CompletionTokens > 0 && u.ReasoningTokens > 0 && u.CompletionTokens > u.ReasoningTokens {
+		return u.CompletionTokens - u.ReasoningTokens
+	}
+	if u.ReasoningTokens == 0 && u.CompletionTokens > 0 && !hasToolCalls {
+		return u.CompletionTokens
+	}
+	tokens := textChars / 4
+	if tokens < 1 {
+		tokens = 1
+	}
+	return tokens
 }
 
 // streamWithRetry streams one response. On provider.ErrContextTooLong it
@@ -516,17 +564,30 @@ func (a *Agent) streamOnce(ctx context.Context, req provider.ChatRequest, turn, 
 		return nil, err
 	}
 	sr := &streamResult{}
+	var (
+		calls     []*provider.ToolCall
+		textStart time.Time
+		textEnd   time.Time
+		textChars int
+	)
 	defer func() {
 		sr.Duration = time.Since(start)
-		sr.TokensPerSec = tokensPerSec(sr.Usage.CompletionTokens, sr.Duration)
+		sr.TextDuration = textPhaseDuration(textStart, textEnd, textChars)
+		sr.TextTokens = answerTextTokens(sr.Usage, textChars, len(calls) > 0)
+		sr.TokensPerSec = tokensPerSec(sr.TextTokens, sr.TextDuration)
 	}()
-	var calls []*provider.ToolCall
 	for ev := range ch {
 		switch ev.Type {
 		case provider.EventReasoningDelta:
 			sr.Reasoning += ev.Text
 			a.emit(Event{Type: EventReasoningDelta, Turn: turn, Step: step, Text: ev.Text})
 		case provider.EventTextDelta:
+			now := time.Now()
+			if textStart.IsZero() {
+				textStart = now
+			}
+			textEnd = now
+			textChars += len(ev.Text)
 			sr.Text += ev.Text
 			a.emit(Event{Type: EventTextDelta, Turn: turn, Step: step, Text: ev.Text})
 		case provider.EventToolCallDelta:
@@ -544,7 +605,9 @@ func (a *Agent) streamOnce(ctx context.Context, req provider.ChatRequest, turn, 
 		case provider.EventUsage:
 			if ev.Usage != nil {
 				sr.Usage = *ev.Usage
-				a.recordUsage(req, *ev.Usage, turn, step, time.Since(start))
+				textTokens := answerTextTokens(*ev.Usage, textChars, len(calls) > 0)
+				textElapsed := textPhaseDuration(textStart, textEnd, textChars)
+				a.recordUsage(req, *ev.Usage, turn, step, time.Since(start), tokensPerSec(textTokens, textElapsed))
 			}
 		case provider.EventError:
 			if ev.Err != nil {
@@ -632,7 +695,7 @@ func (a *Agent) cacheDebug(req provider.ChatRequest, step int) {
 }
 
 // recordUsage accumulates accounting and emits a live usage event.
-func (a *Agent) recordUsage(req provider.ChatRequest, u provider.Usage, turn, step int, elapsed time.Duration) {
+func (a *Agent) recordUsage(req provider.ChatRequest, u provider.Usage, turn, step int, elapsed time.Duration, speed float64) {
 	cost := a.costForUsage(u, time.Now())
 	a.addUsage(u, cost)
 	a.lastPromptTokens = u.PromptTokens
@@ -651,7 +714,7 @@ func (a *Agent) recordUsage(req provider.ChatRequest, u provider.Usage, turn, st
 		TotalCostUSD: a.totalCost,
 		CacheHitRate: cacheHitRate(a.totalUsage),
 		DurationMs:   durationMillis(elapsed),
-		TokensPerSec: tokensPerSec(u.CompletionTokens, elapsed),
+		TokensPerSec: speed,
 	})
 }
 
