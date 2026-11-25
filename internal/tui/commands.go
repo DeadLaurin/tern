@@ -1,0 +1,601 @@
+package tui
+
+import (
+	"context"
+	"fmt"
+	"os"
+	"path/filepath"
+	"sort"
+	"strconv"
+	"strings"
+	"time"
+
+	tea "github.com/charmbracelet/bubbletea"
+
+	"github.com/tern-agent/tern/internal/checkpoint"
+	"github.com/tern-agent/tern/internal/config"
+	terncontext "github.com/tern-agent/tern/internal/context"
+	"github.com/tern-agent/tern/internal/permission"
+	"github.com/tern-agent/tern/internal/provider"
+)
+
+// builtinCommandNames lists every built-in slash command. It drives completion
+// and /help.
+var builtinCommandNames = []string{
+	"agents",
+	"clear",
+	"compact",
+	"config",
+	"context",
+	"cost",
+	"export",
+	"fork",
+	"help",
+	"mcp",
+	"model",
+	"name",
+	"plan",
+	"quit",
+	"rewind",
+	"sessions",
+	"skills",
+	"undo",
+}
+
+// handleSlash dispatches a slash command. Custom commands loaded from the
+// project/global commands directories are expanded and submitted as a prompt.
+func (m *Model) handleSlash(line string, attachments []provider.ContentPart) tea.Cmd {
+	line = strings.TrimSpace(strings.TrimPrefix(line, "/"))
+	if line == "" {
+		m.addError("Empty command. Type /help for available commands.")
+		return nil
+	}
+	name, args := splitCommandLine(line)
+	switch name {
+	case "help":
+		m.addInfo(m.helpText())
+		return nil
+
+	case "model":
+		return m.cmdModel(args)
+
+	case "plan":
+		return m.cmdPlan()
+
+	case "compact":
+		return m.cmdCompact(args)
+
+	case "cost":
+		m.addInfo(m.costText())
+		return nil
+
+	case "context":
+		m.addInfo(m.contextText())
+		return nil
+
+	case "agents":
+		m.agentsPanel = true
+		m.agentsOpen = false
+		if len(m.agentOrder) > 0 {
+			if m.panelIndex >= len(m.agentOrder) {
+				m.panelIndex = 0
+			}
+			m.statusMsg = "Sub-agents"
+		}
+		m.dirty = true
+		return nil
+
+	case "clear":
+		m.entries = nil
+		m.pendingText = ""
+		m.pendingReasoning = ""
+		m.curAssistant = nil
+		m.curReasoning = nil
+		m.toolEntries = nil
+		m.content = ""
+		m.addInfo("Cleared the transcript view. Session history on disk is unchanged.")
+		return nil
+
+	case "undo":
+		return m.cmdUndo()
+
+	case "rewind":
+		return m.cmdRewind(args)
+
+	case "sessions":
+		return m.cmdSessions(args)
+
+	case "fork":
+		return m.cmdFork(args)
+
+	case "name":
+		return m.cmdName(args)
+
+	case "export":
+		return m.cmdExport(args)
+
+	case "skills":
+		return m.cmdSkills(args)
+
+	case "mcp":
+		m.addInfo(m.mcpText())
+		return nil
+
+	case "config":
+		if m.opts.Config == nil {
+			m.addError("No configuration loaded.")
+		} else {
+			m.addInfo(configSummary(m.opts.Config))
+		}
+		return nil
+
+	case "quit":
+		return tea.Quit
+	}
+
+	for _, cmd := range m.commands {
+		if strings.EqualFold(cmd.Name, name) {
+			expanded := cmd.Expand(args)
+			if strings.TrimSpace(expanded) == "" {
+				m.addError("Custom command /" + cmd.Name + " expanded to an empty prompt.")
+				return nil
+			}
+			return m.startTurn(expanded, attachments)
+		}
+	}
+
+	m.addError("Unknown command /" + name + ". Type /help for available commands.")
+	return nil
+}
+
+func splitCommandLine(line string) (string, string) {
+	fields := strings.SplitN(line, " ", 2)
+	name := strings.TrimSpace(fields[0])
+	args := ""
+	if len(fields) > 1 {
+		args = strings.TrimSpace(fields[1])
+	}
+	return name, args
+}
+
+func configSummary(cfg *config.Config) string {
+	key := "[not set]"
+	if strings.TrimSpace(cfg.APIKey) != "" {
+		key = "[set]"
+	}
+	var b strings.Builder
+	fmt.Fprintf(&b, "api_key = %q\n", key)
+	fmt.Fprintf(&b, "model = %q\n", cfg.Model)
+	fmt.Fprintf(&b, "base_url = %q\n", cfg.BaseURL)
+	fmt.Fprintf(&b, "reasoning_effort = %q\n", cfg.ReasoningEffort)
+	fmt.Fprintf(&b, "permission_mode = %q\n", cfg.PermissionMode)
+	fmt.Fprintf(&b, "web_permission = %q\n", cfg.WebPermission)
+	fmt.Fprintf(&b, "max_steps = %d\n", cfg.MaxSteps)
+	fmt.Fprintf(&b, "max_cost_usd = %g\n", cfg.MaxCostUSD)
+	fmt.Fprintf(&b, "max_agents = %d\n", cfg.MaxAgents)
+	fmt.Fprintf(&b, "max_agent_depth = %d\n", cfg.MaxAgentDepth)
+	fmt.Fprintf(&b, "auto_compact_threshold = %g\n", cfg.AutoCompactThreshold)
+	fmt.Fprintf(&b, "shell = %q\n", cfg.Shell)
+	fmt.Fprintf(&b, "search_backend = %q\n", cfg.SearchBackend)
+	fmt.Fprintf(&b, "pricing_models = %d\n", len(cfg.Pricing))
+	return strings.TrimRight(b.String(), "\n")
+}
+
+func (m *Model) helpText() string {
+	var b strings.Builder
+	b.WriteString("Slash commands:\n")
+	help := map[string]string{
+		"/help":                    "show this help",
+		"/model [name]":            "show or change the model",
+		"/plan":                    "toggle read-only plan mode",
+		"/compact [text]":          "summarize older context (optional instructions)",
+		"/cost":                    "show token usage and estimated cost",
+		"/context":                 "show context window usage",
+		"/agents":                  "inspect, cancel one, or cancel all sub-agents",
+		"/clear":                   "clear the transcript view",
+		"/undo":                    "restore files from the latest checkpoint",
+		"/rewind [turn]":           "list turns or restore the state before a turn",
+		"/sessions [query]":        "list recent sessions",
+		"/fork [name]":             "fork the current session transcript",
+		"/name <name>":             "rename the current session",
+		"/export [md|html] [path]": "export the session transcript",
+		"/skills [name]":           "list skills or show one skill",
+		"/mcp":                     "show MCP server status",
+		"/config":                  "show the effective configuration",
+		"/quit":                    "exit tern",
+	}
+	names := make([]string, 0, len(help))
+	for name := range help {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		fmt.Fprintf(&b, "  %-28s %s\n", name, help[name])
+	}
+	if len(m.commands) > 0 {
+		b.WriteString("\nCustom commands:\n")
+		for _, cmd := range m.commands {
+			desc := cmd.Description
+			if desc == "" {
+				desc = cmd.Path
+			}
+			fmt.Fprintf(&b, "  /%-26s %s\n", cmd.Name, desc)
+		}
+	}
+	b.WriteString("\nKeys: enter send · shift/alt+enter newline · ctrl+r history search · ctrl+t reasoning/tools · ctrl+g $EDITOR · tab complete · ctrl+c cancel/quit")
+	return strings.TrimRight(b.String(), "\n")
+}
+
+func (m *Model) cmdModel(args string) tea.Cmd {
+	if strings.TrimSpace(args) == "" {
+		names := make([]string, 0, len(m.opts.Config.Pricing))
+		for name := range m.opts.Config.Pricing {
+			names = append(names, name)
+		}
+		sort.Strings(names)
+		current := m.opts.Config.Model
+		var b strings.Builder
+		fmt.Fprintf(&b, "Current model: %s\n", current)
+		b.WriteString("Available models:\n")
+		for _, name := range names {
+			marker := "  "
+			if name == current {
+				marker = "* "
+			}
+			fmt.Fprintf(&b, "  %s%s\n", marker, name)
+		}
+		m.addInfo(strings.TrimRight(b.String(), "\n"))
+		return nil
+	}
+	name := strings.TrimSpace(strings.Fields(args)[0])
+	m.opts.Config.Model = name
+	if m.opts.Agent != nil {
+		if m.opts.Agent.Config == nil {
+			m.opts.Agent.Config = m.opts.Config
+		}
+		m.opts.Agent.Config.Model = name
+		if m.opts.Agent.Provider != nil {
+			if caps := m.opts.Agent.Provider.ModelInfo(name); caps.ContextWindow > 0 {
+				m.ctxWindow = caps.ContextWindow
+			}
+		}
+	}
+	m.addInfo("Model set to " + name + ".")
+	return nil
+}
+
+func (m *Model) cmdPlan() tea.Cmd {
+	mode := permission.ModeAsk
+	current := permission.ModeAsk
+	if m.opts.Agent != nil && m.opts.Agent.Permissions != nil {
+		current = m.opts.Agent.Permissions.Mode()
+	}
+	if current == permission.ModePlan {
+		mode = permission.ModeAsk
+	} else {
+		mode = permission.ModePlan
+	}
+	m.opts.Config.PermissionMode = mode.String()
+	if m.opts.Agent != nil {
+		if m.opts.Agent.Permissions == nil {
+			m.opts.Agent.Permissions = permission.New(permission.Policy{
+				Mode:    mode,
+				WorkDir: m.opts.WorkDir,
+			})
+		} else {
+			policy := m.opts.Agent.Permissions.Policy()
+			policy.Mode = mode
+			policy.WorkDir = m.opts.WorkDir
+			m.opts.Agent.Permissions = permission.New(policy)
+		}
+		m.opts.Agent.Config.PermissionMode = mode.String()
+	}
+	if mode == permission.ModePlan {
+		m.addInfo("Plan mode enabled: writes and mutating commands are denied.")
+	} else {
+		m.addInfo("Plan mode disabled: permission mode is ask.")
+	}
+	return nil
+}
+
+func (m *Model) cmdCompact(instructions string) tea.Cmd {
+	if m.running {
+		m.addError("Cannot compact while a turn is running. Press Ctrl+C first.")
+		return nil
+	}
+	if m.opts.Agent == nil {
+		m.addError("No agent configured.")
+		return nil
+	}
+	base := m.baseCtx
+	if base == nil {
+		base = context.Background()
+	}
+	m.addInfo("Compacting context…")
+	go func() {
+		ctx, cancel := context.WithTimeout(base, 2*time.Minute)
+		defer cancel()
+		result, err := m.opts.Agent.Compact(ctx, instructions)
+		if err != nil {
+			m.bus.Push(cmdResultMsg{text: "compaction failed", err: err})
+			return
+		}
+		m.bus.Push(cmdResultMsg{
+			text: fmt.Sprintf("Context compacted: %d → %d messages (%d summarized, %d kept).",
+				result.MessagesBefore, result.MessagesAfter, result.MessagesSummarized, result.KeptTail),
+		})
+	}()
+	return nil
+}
+
+func (m *Model) costText() string {
+	if !m.running && m.opts.Agent != nil {
+		if usage, cost := m.opts.Agent.TotalUsage(); usage.TotalTokens > 0 || cost > 0 {
+			m.usage, m.totalCost = usage, cost
+			m.cache = cacheRate(m.usage)
+		}
+	}
+	cachePct := int(m.cache*100 + 0.5)
+	var b strings.Builder
+	fmt.Fprintf(&b, "Cost: $%.4f\n", m.totalCost)
+	fmt.Fprintf(&b, "Tokens: %d prompt, %d completion, %d total\n",
+		m.usage.PromptTokens, m.usage.CompletionTokens, m.usage.TotalTokens)
+	fmt.Fprintf(&b, "Cache: %d hit / %d miss (%d%%)\n",
+		m.usage.PromptCacheHitTokens, m.usage.PromptCacheMissTokens, cachePct)
+	if m.opts.Config.MaxCostUSD > 0 {
+		fmt.Fprintf(&b, "Budget: $%.4f of $%.4f\n", m.totalCost, m.opts.Config.MaxCostUSD)
+	}
+	return strings.TrimRight(b.String(), "\n")
+}
+
+func (m *Model) contextText() string {
+	tokens := m.ctxTokens
+	messages := len(m.entries)
+	if !m.running && m.opts.Agent != nil {
+		history := m.opts.Agent.History()
+		messages = len(history)
+		if chars := historyChars(history); chars/4 > tokens {
+			tokens = chars / 4
+		}
+	}
+	window := m.ctxWindow
+	if window <= 0 {
+		window = 1_000_000
+	}
+	pct := float64(tokens) / float64(window) * 100
+	return fmt.Sprintf("Context: ~%d / %d tokens (%.1f%%) · %d active messages", tokens, window, pct, messages)
+}
+
+func (m *Model) cmdUndo() tea.Cmd {
+	if m.opts.Checkpoints == nil {
+		m.addError("Checkpoints are not enabled for this session.")
+		return nil
+	}
+	result, err := m.opts.Checkpoints.Undo()
+	if err != nil {
+		m.addError("undo failed: " + err.Error())
+		return nil
+	}
+	m.addInfo(formatRestore("Undid the latest turn", result))
+	return nil
+}
+
+func (m *Model) cmdRewind(args string) tea.Cmd {
+	if m.opts.Checkpoints == nil {
+		m.addError("Checkpoints are not enabled for this session.")
+		return nil
+	}
+	args = strings.TrimSpace(args)
+	if args == "" {
+		turns := m.opts.Checkpoints.List()
+		if len(turns) == 0 {
+			m.addInfo("No checkpointed turns.")
+			return nil
+		}
+		var b strings.Builder
+		b.WriteString("Checkpointed turns (newest last):\n")
+		for _, turn := range turns {
+			fmt.Fprintf(&b, "  %d  %s  %d file(s)  %s\n",
+				turn.TurnID, turn.Timestamp.Local().Format("2006-01-02 15:04"), turn.FileCount, turn.Summary)
+		}
+		b.WriteString("\nUse /rewind <turn> to restore the state before that turn.")
+		m.addInfo(b.String())
+		return nil
+	}
+	turnID, err := strconv.Atoi(args)
+	if err != nil {
+		m.addError("rewind: turn must be an integer")
+		return nil
+	}
+	result, err := m.opts.Checkpoints.RewindBefore(turnID)
+	if err != nil {
+		m.addError("rewind failed: " + err.Error())
+		return nil
+	}
+	m.addInfo(formatRestore(fmt.Sprintf("Rewound to before turn %d", turnID), result))
+	return nil
+}
+
+func formatRestore(prefix string, result *checkpoint.RestoreResult) string {
+	if result == nil {
+		return prefix + "."
+	}
+	return fmt.Sprintf("%s: %d restored, %d deleted (turns %v).",
+		prefix, len(result.Restored), len(result.Deleted), result.TurnIDs)
+}
+
+func (m *Model) cmdSessions(query string) tea.Cmd {
+	if m.opts.SessionStore == nil {
+		m.addError("Session storage is not configured.")
+		return nil
+	}
+	list, err := m.opts.SessionStore.List(query)
+	if err != nil {
+		m.addError("sessions: " + err.Error())
+		return nil
+	}
+	if len(list) == 0 {
+		m.addInfo("No sessions found.")
+		return nil
+	}
+	var b strings.Builder
+	b.WriteString("Recent sessions:\n")
+	for i, item := range list {
+		if i >= 20 {
+			fmt.Fprintf(&b, "  … %d more\n", len(list)-i)
+			break
+		}
+		name := item.Name
+		if name == "" {
+			name = item.ID
+		}
+		fmt.Fprintf(&b, "  %-28s %-20s %d msgs  $%.3f  %s\n",
+			truncateCell(name, 28), item.ID, item.MessageCount, item.CostUSD, item.UpdatedAt.Local().Format("2006-01-02 15:04"))
+	}
+	m.addInfo(strings.TrimRight(b.String(), "\n"))
+	return nil
+}
+
+func (m *Model) cmdFork(args string) tea.Cmd {
+	if m.opts.SessionStore == nil || m.opts.Session == nil {
+		m.addError("Session storage is not configured.")
+		return nil
+	}
+	forked, err := m.opts.SessionStore.Fork(m.opts.Session.ID(), strings.TrimSpace(args))
+	if err != nil {
+		m.addError("fork: " + err.Error())
+		return nil
+	}
+	m.addInfo("Forked session " + forked.ID() + ". Start tern with --resume " + forked.ID() + " to continue it.")
+	return nil
+}
+
+func (m *Model) cmdName(args string) tea.Cmd {
+	name := strings.TrimSpace(args)
+	if name == "" {
+		m.addError("Usage: /name <name>")
+		return nil
+	}
+	if m.opts.Session != nil {
+		if err := m.opts.Session.Rename(name); err != nil {
+			m.addError("rename failed: " + err.Error())
+			return nil
+		}
+		m.addInfo("Session renamed to " + name + ".")
+		return nil
+	}
+	if m.opts.SessionStore == nil {
+		m.addError("Session storage is not configured.")
+		return nil
+	}
+	m.addError("No active session to rename.")
+	return nil
+}
+
+func (m *Model) cmdExport(args string) tea.Cmd {
+	if m.opts.Session == nil {
+		m.addError("No active session to export.")
+		return nil
+	}
+	format := "md"
+	rest := strings.TrimSpace(args)
+	fields := strings.Fields(rest)
+	if len(fields) > 0 {
+		candidate := strings.ToLower(fields[0])
+		if candidate == "md" || candidate == "markdown" {
+			format = "md"
+			rest = strings.TrimSpace(strings.TrimPrefix(rest, fields[0]))
+		} else if candidate == "html" || candidate == "htm" {
+			format = "html"
+			rest = strings.TrimSpace(strings.TrimPrefix(rest, fields[0]))
+		}
+	}
+	path := strings.TrimSpace(strings.Trim(rest, `"'`))
+	if path == "" {
+		ext := ".md"
+		if format == "html" {
+			ext = ".html"
+		}
+		path = filepath.Join(m.opts.WorkDir, "tern-"+m.opts.Session.ID()+ext)
+	} else if !filepath.IsAbs(path) {
+		path = filepath.Join(m.opts.WorkDir, path)
+	}
+	file, err := os.Create(path)
+	if err != nil {
+		m.addError("export: " + err.Error())
+		return nil
+	}
+	if format == "html" {
+		err = m.opts.Session.ExportHTML(file)
+	} else {
+		err = m.opts.Session.ExportMarkdown(file)
+	}
+	closeErr := file.Close()
+	if err == nil {
+		err = closeErr
+	}
+	if err != nil {
+		m.addError("export: " + err.Error())
+		return nil
+	}
+	m.addInfo("Exported session to " + path)
+	return nil
+}
+
+func (m *Model) cmdSkills(args string) tea.Cmd {
+	name := strings.TrimSpace(args)
+	if name == "" {
+		skills, err := terncontext.ListSkills(m.opts.WorkDir, m.opts.GlobalConfigDir)
+		if err != nil {
+			m.addError("skills: " + err.Error())
+			return nil
+		}
+		if len(skills) == 0 {
+			m.addInfo("No skills found. Add markdown files under .tern/skills.")
+			return nil
+		}
+		var b strings.Builder
+		b.WriteString("Skills:\n")
+		for _, skill := range skills {
+			fmt.Fprintf(&b, "  %-24s %s\n", skill.Name, skill.Description)
+		}
+		m.addInfo(strings.TrimRight(b.String(), "\n"))
+		return nil
+	}
+	skill, err := terncontext.LoadSkill(m.opts.WorkDir, m.opts.GlobalConfigDir, name)
+	if err != nil {
+		m.addError("skills: " + err.Error())
+		return nil
+	}
+	var b strings.Builder
+	fmt.Fprintf(&b, "# %s\n", skill.Name)
+	if skill.Description != "" {
+		fmt.Fprintf(&b, "%s\n\n", skill.Description)
+	}
+	b.WriteString(skill.Body)
+	m.addInfo(strings.TrimRight(b.String(), "\n"))
+	return nil
+}
+
+func (m *Model) mcpText() string {
+	if m.opts.Extensions == nil {
+		return "No MCP servers configured."
+	}
+	status := m.opts.Extensions.Status()
+	if len(status) == 0 {
+		return "No MCP servers configured."
+	}
+	var b strings.Builder
+	b.WriteString("MCP servers:\n")
+	for _, server := range status {
+		state := "disconnected"
+		if server.Connected {
+			state = "connected"
+		}
+		fmt.Fprintf(&b, "  %-20s %-10s %-13s %d tool(s)\n", server.Name, server.Transport, state, server.ToolCount)
+		if server.Error != "" {
+			fmt.Fprintf(&b, "    error: %s\n", server.Error)
+		}
+	}
+	return strings.TrimRight(b.String(), "\n")
+}
