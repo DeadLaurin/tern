@@ -13,7 +13,9 @@
 
 # tern
 
-A small, fast, minimalist terminal coding agent for the DeepSeek API.
+A small, fast, minimalist terminal coding agent built for **DeepSeek**, with first-class support for **OpenRouter**, other cloud providers, local models, and multi-agent / ACP workflows.
+
+`tern` was created for and favors the DeepSeek API (prefix-cache-first architecture, `deepseek-flash` & `deepseek-v4-pro`, reasoning passback), while remaining capable of running against OpenRouter, OpenAI, Groq, xAI, Mistral, Together, Ollama, LM Studio, or any custom OpenAI-compatible endpoint — and integrating with ACP hosts and Claude/Agent skills.
 
 Type `tern` in any repository and start working. Single static Go binary, ~10 ms startup, calm two-pane TUI, parallel sub-agents, and transparent plain-file state.
 
@@ -53,11 +55,13 @@ cd your-project
 tern
 ```
 
-On first launch, if `DEEPSEEK_API_KEY` isn't set in your environment, `tern` prompts for it once and saves it to your OS config directory (`0600`). Every launch after that opens straight into your repo and automatically picks up `AGENTS.md` or `TERN.md` instructions.
+On first launch, `tern` opens the TUI immediately and walks you through choosing a provider — recommending **DeepSeek** first while also offering **OpenRouter**, other cloud APIs, **Ollama**, **LM Studio**, and custom OpenAI-compatible servers. Credentials are saved per provider (`0600`). Every launch after that opens straight into your repo and automatically picks up `AGENTS.md`, `TERN.md`, and `.claude/skills` / `.agents/skills`.
 
-Want to run against a local model (Ollama or any OpenAI-compatible server)?
+Switch providers anytime with `/provider` in the TUI or via CLI flags:
 
 ```sh
+tern providers
+tern --provider openrouter --model anthropic/claude-sonnet-4
 tern --local
 ```
 
