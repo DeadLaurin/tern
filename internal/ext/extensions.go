@@ -18,15 +18,24 @@ import (
 
 // Extension layout, manifest and namespacing constants.
 const (
-	// ExtensionManifestFile is the preferred manifest filename inside an
-	// extension directory.
+	// PluginManifestFile is the preferred manifest filename inside a plugin
+	// (formerly extension) directory.
+	PluginManifestFile = "plugin.toml"
+	// ExtensionManifestFile is the legacy manifest filename. It is still read
+	// when plugin.toml is absent.
 	ExtensionManifestFile = "extension.toml"
-	// AltManifestFile is accepted when extension.toml is absent.
+	// AltManifestFile is accepted when neither plugin.toml nor extension.toml
+	// is present.
 	AltManifestFile = "manifest.toml"
-	// ExtensionsDirName is the directory (below a config/work dir) that holds
-	// installed extensions.
+	// PluginsDirName is the directory (below a config/work dir) that holds
+	// installed plugins.
+	PluginsDirName = "plugins"
+	// ProjectPluginsDir is the project-relative plugins directory.
+	ProjectPluginsDir = ".tern/plugins"
+	// ExtensionsDirName is the legacy directory (below a config/work dir) that
+	// holds installed extensions. It is still scanned as a fallback.
 	ExtensionsDirName = "extensions"
-	// ProjectExtensionsDir is the project-relative extensions directory.
+	// ProjectExtensionsDir is the project-relative legacy extensions directory.
 	ProjectExtensionsDir = ".tern/extensions"
 
 	// ExtensionToolPrefix namespaces tools contributed by extensions.
@@ -279,10 +288,10 @@ func (s ExtensionSet) conventionalDirs(get func(*Extension) string) []string {
 	return out
 }
 
-// DiscoverExtensions scans global and project extension directories and
-// returns enabled extensions sorted by name, plus non-fatal warnings for
-// broken manifests. Project extensions override global extensions with the
-// same manifest name.
+// DiscoverExtensions scans global and project plugin directories (plus the
+// legacy extensions/ directories) and returns enabled plugins sorted by name,
+// plus non-fatal warnings for broken manifests. Plugins override legacy
+// extensions with the same manifest name, and project overrides global.
 func DiscoverExtensions(workDir, globalConfigDir string) ([]*Extension, []string) {
 	return listExtensions(workDir, globalConfigDir, false)
 }
@@ -311,11 +320,19 @@ func listExtensions(workDir, globalConfigDir string, includeDisabled bool) ([]*E
 		}
 	}
 
+	// Legacy extensions/ directories are scanned first so that plugins/ win
+	// the name deduplication below; within each kind, project overrides global.
 	if strings.TrimSpace(globalConfigDir) != "" {
 		addSource(filepath.Join(globalConfigDir, ExtensionsDirName), ExtensionSourceGlobal)
 	}
 	if strings.TrimSpace(workDir) != "" {
 		addSource(filepath.Join(workDir, filepath.FromSlash(ProjectExtensionsDir)), ExtensionSourceProject)
+	}
+	if strings.TrimSpace(globalConfigDir) != "" {
+		addSource(filepath.Join(globalConfigDir, PluginsDirName), ExtensionSourceGlobal)
+	}
+	if strings.TrimSpace(workDir) != "" {
+		addSource(filepath.Join(workDir, filepath.FromSlash(ProjectPluginsDir)), ExtensionSourceProject)
 	}
 
 	out := make([]*Extension, 0, len(byName))
@@ -385,11 +402,12 @@ func loadExtension(dir, source string) (*Extension, error) {
 	return ext, nil
 }
 
-// ReadExtensionManifest loads extension.toml (or manifest.toml) from dir.
+// ReadExtensionManifest loads plugin.toml (or the legacy extension.toml /
+// manifest.toml) from dir.
 func ReadExtensionManifest(dir string) (ExtensionManifest, error) {
 	var manifest ExtensionManifest
 	path := ""
-	for _, name := range []string{ExtensionManifestFile, AltManifestFile} {
+	for _, name := range []string{PluginManifestFile, ExtensionManifestFile, AltManifestFile} {
 		candidate := filepath.Join(dir, name)
 		if info, err := os.Stat(candidate); err == nil && !info.IsDir() {
 			path = candidate
@@ -506,8 +524,13 @@ func resolveExtensionPath(dir, command string) string {
 	return filepath.Join(dir, command)
 }
 
-// InstallExtension installs an extension from a local directory or git URL into
-// <globalConfigDir>/extensions/<name>/.
+// InstallExtension installs a plugin from a local directory or git URL into
+// <globalConfigDir>/plugins/<name>/.
+//
+// For backwards compatibility it also exposes the install under the legacy
+// <globalConfigDir>/extensions/<name>/ path (as a symlink when possible, else a
+// copy), so existing tooling that still scans extensions/ keeps working. The
+// plugins/ location always takes precedence during discovery.
 func InstallExtension(globalConfigDir, source string) (*Extension, error) {
 	if strings.TrimSpace(globalConfigDir) == "" {
 		return nil, errors.New("ext: global config directory is required")
@@ -552,25 +575,53 @@ func InstallExtension(globalConfigDir, source string) (*Extension, error) {
 		return nil, err
 	}
 
-	dest := filepath.Join(globalConfigDir, ExtensionsDirName, manifest.Name)
-	if _, err := os.Stat(dest); err == nil {
-		return nil, fmt.Errorf("ext: extension %q is already installed at %s", manifest.Name, dest)
-	} else if !os.IsNotExist(err) {
-		return nil, fmt.Errorf("ext: check install destination: %w", err)
+	dest := filepath.Join(globalConfigDir, PluginsDirName, manifest.Name)
+	legacy := filepath.Join(globalConfigDir, ExtensionsDirName, manifest.Name)
+	for _, existing := range []string{dest, legacy} {
+		if _, err := os.Stat(existing); err == nil {
+			return nil, fmt.Errorf("ext: plugin %q is already installed at %s", manifest.Name, existing)
+		} else if !os.IsNotExist(err) {
+			return nil, fmt.Errorf("ext: check install destination: %w", err)
+		}
 	}
 
 	if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil {
-		return nil, fmt.Errorf("ext: create extensions directory: %w", err)
+		return nil, fmt.Errorf("ext: create plugins directory: %w", err)
 	}
 	if err := copyExtensionTree(srcDir, dest); err != nil {
 		_ = os.RemoveAll(dest)
-		return nil, fmt.Errorf("ext: install extension %q: %w", manifest.Name, err)
+		return nil, fmt.Errorf("ext: install plugin %q: %w", manifest.Name, err)
 	}
 
-	return loadExtension(dest, ExtensionSourceGlobal)
+	// Best-effort legacy compatibility shim. Failure here is not fatal: the
+	// plugin is installed and discoverable from plugins/.
+	legacyDir := dest
+	if err := linkLegacyExtension(dest, legacy); err == nil {
+		legacyDir = legacy
+	}
+
+	return loadExtension(legacyDir, ExtensionSourceGlobal)
 }
 
-// RemoveExtension removes <globalConfigDir>/extensions/<name>/.
+// linkLegacyExtension exposes an installed plugin at the legacy extensions/
+// path, preferring a relative symlink and falling back to a directory copy on
+// filesystems where symlinks are unavailable.
+func linkLegacyExtension(dest, legacy string) error {
+	if err := os.MkdirAll(filepath.Dir(legacy), 0o755); err != nil {
+		return err
+	}
+	target, err := filepath.Rel(filepath.Dir(legacy), dest)
+	if err != nil {
+		target = dest
+	}
+	if err := os.Symlink(target, legacy); err == nil {
+		return nil
+	}
+	return copyExtensionTree(dest, legacy)
+}
+
+// RemoveExtension removes <globalConfigDir>/plugins/<name>/ and, when present,
+// the legacy <globalConfigDir>/extensions/<name>/ install.
 func RemoveExtension(globalConfigDir, name string) error {
 	if strings.TrimSpace(globalConfigDir) == "" {
 		return errors.New("ext: global config directory is required")
@@ -579,19 +630,34 @@ func RemoveExtension(globalConfigDir, name string) error {
 	if err := validateExtensionName(name); err != nil {
 		return err
 	}
-	dir := filepath.Join(globalConfigDir, ExtensionsDirName, name)
-	info, err := os.Stat(dir)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return fmt.Errorf("ext: extension %q is not installed", name)
+	candidates := []string{
+		filepath.Join(globalConfigDir, PluginsDirName, name),
+		filepath.Join(globalConfigDir, ExtensionsDirName, name),
+	}
+	removed := false
+	for _, dir := range candidates {
+		info, err := os.Lstat(dir)
+		if err != nil {
+			if os.IsNotExist(err) {
+				continue
+			}
+			return fmt.Errorf("ext: stat plugin %q: %w", name, err)
 		}
-		return fmt.Errorf("ext: stat extension %q: %w", name, err)
+		if info.IsDir() {
+			if err := os.RemoveAll(dir); err != nil {
+				return fmt.Errorf("ext: remove plugin %q: %w", name, err)
+			}
+			removed = true
+			continue
+		}
+		// A legacy install shim may be a symlink rather than a real directory.
+		if err := os.Remove(dir); err != nil {
+			return fmt.Errorf("ext: remove plugin %q: %w", name, err)
+		}
+		removed = true
 	}
-	if !info.IsDir() {
-		return fmt.Errorf("ext: extension %q is not a directory", name)
-	}
-	if err := os.RemoveAll(dir); err != nil {
-		return fmt.Errorf("ext: remove extension %q: %w", name, err)
+	if !removed {
+		return fmt.Errorf("ext: plugin %q is not installed", name)
 	}
 	return nil
 }
