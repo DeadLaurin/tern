@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/tern-agent/tern/internal/agent"
+	"github.com/tern-agent/tern/internal/checkpoint"
 	"github.com/tern-agent/tern/internal/config"
 	"github.com/tern-agent/tern/internal/provider"
 	"github.com/tern-agent/tern/internal/session"
@@ -927,5 +928,232 @@ func TestBuildRuntimeLoadsProjectExtensionTool(t *testing.T) {
 	}
 	if strings.TrimSpace(rt.Extensions[0].Dir) != strings.TrimSpace(extDir) {
 		t.Fatalf("extension dir = %q, want %q", rt.Extensions[0].Dir, extDir)
+	}
+}
+
+func TestLocalBaseURLSkipsAPIKey(t *testing.T) {
+	var gotAuth string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotAuth = r.Header.Get("Authorization")
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = io.WriteString(w,
+			`data: {"choices":[{"index":0,"delta":{"content":"local hello"}}]}`+"\n\n"+
+				`data: {"choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}`+"\n\n"+
+				"data: [DONE]\n\n")
+	}))
+	defer server.Close()
+
+	o := testRunOptions(t)
+	t.Setenv("DEEPSEEK_API_KEY", "")
+	o.Args = []string{"-p", "say hi locally", "--base-url", server.URL, "--local"}
+	o.StdinTTY = false
+	o.In = strings.NewReader("")
+
+	if code := runWithOptions(o); code != 0 {
+		t.Fatalf("local print mode exit %d, stderr: %s", code, o.Err.(*bytes.Buffer).String())
+	}
+	out := o.Out.(*bytes.Buffer).String()
+	if !strings.Contains(out, "local hello") {
+		t.Fatalf("local print output = %q", out)
+	}
+	if strings.Contains(out, "DEEPSEEK_API_KEY") {
+		t.Fatalf("local mode prompted for an API key:\n%s", out)
+	}
+	if gotAuth != "Bearer local" {
+		t.Fatalf("Authorization = %q, want %q", gotAuth, "Bearer local")
+	}
+}
+
+func TestLocalFlagDefaultAndBaseURLOverride(t *testing.T) {
+	o := testRunOptions(t)
+	t.Setenv("TERN_BASE_URL", "")
+
+	opts, err := parseCLI([]string{"--local"}, nil)
+	if err != nil {
+		t.Fatalf("parseCLI --local: %v", err)
+	}
+	cfg, err := loadConfig(opts, o.WorkDir)
+	if err != nil {
+		t.Fatalf("loadConfig --local: %v", err)
+	}
+	if cfg.BaseURL != defaultLocalBaseURL {
+		t.Fatalf("--local base URL = %q, want %q", cfg.BaseURL, defaultLocalBaseURL)
+	}
+
+	opts, err = parseCLI([]string{"--local", "--base-url", "http://127.0.0.1:9999/v1"}, nil)
+	if err != nil {
+		t.Fatalf("parseCLI --local --base-url: %v", err)
+	}
+	cfg, err = loadConfig(opts, o.WorkDir)
+	if err != nil {
+		t.Fatalf("loadConfig --local --base-url: %v", err)
+	}
+	if cfg.BaseURL != "http://127.0.0.1:9999/v1" {
+		t.Fatalf("--base-url did not override --local: %q", cfg.BaseURL)
+	}
+}
+
+func TestLogAndUndoCommands(t *testing.T) {
+	o := testRunOptions(t)
+	dataDir := os.Getenv("TERN_DATA_DIR")
+	store, err := session.NewStore(dataDir)
+	if err != nil {
+		t.Fatalf("session.NewStore: %v", err)
+	}
+	sess, err := store.Create(session.SessionMeta{
+		ID:      "session-undo",
+		Name:    "Undo Session",
+		Model:   "mock-model",
+		WorkDir: o.WorkDir,
+	})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	checkpoints, err := checkpoint.NewStore(filepath.Join(dataDir, "checkpoints"), sess.ID())
+	if err != nil {
+		t.Fatalf("checkpoint.NewStore: %v", err)
+	}
+
+	aPath := filepath.Join(o.WorkDir, "a.txt")
+	bPath := filepath.Join(o.WorkDir, "b.txt")
+	if err := os.WriteFile(aPath, []byte("v1"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	commitTurn := func(id int, summary string, paths []string, mutate func()) {
+		t.Helper()
+		turn := checkpoints.BeginTurn(id, summary)
+		for _, path := range paths {
+			if err := turn.RecordBefore(path); err != nil {
+				t.Fatalf("RecordBefore %s: %v", path, err)
+			}
+		}
+		mutate()
+		if err := checkpoints.CommitTurn(turn); err != nil {
+			t.Fatalf("CommitTurn %d: %v", id, err)
+		}
+	}
+	commitTurn(1, "first turn", []string{aPath}, func() {
+		if err := os.WriteFile(aPath, []byte("v2"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	})
+	commitTurn(2, "second turn", []string{aPath, bPath}, func() {
+		if err := os.WriteFile(aPath, []byte("v3"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(bPath, []byte("new file"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	})
+
+	run := func(args ...string) (string, string, int) {
+		t.Helper()
+		next := o
+		out := &bytes.Buffer{}
+		errOut := &bytes.Buffer{}
+		next.Out = out
+		next.Err = errOut
+		next.Args = args
+		code := runWithOptions(next)
+		return out.String(), errOut.String(), code
+	}
+
+	logOut, logErr, code := run("log")
+	if code != 0 {
+		t.Fatalf("tern log exit %d, stderr: %s", code, logErr)
+	}
+	for _, want := range []string{
+		"Undo Session",
+		"first turn",
+		"second turn",
+		aPath,
+		bPath,
+		"FILES",
+	} {
+		if !strings.Contains(logOut, want) {
+			t.Fatalf("log output missing %q:\n%s", want, logOut)
+		}
+	}
+
+	undoOut, undoErr, code := run("undo")
+	if code != 0 {
+		t.Fatalf("tern undo exit %d, stderr: %s", code, undoErr)
+	}
+	for _, want := range []string{"Undid 1 checkpoint turn", "Restored:", aPath, "Deleted:", bPath} {
+		if !strings.Contains(undoOut, want) {
+			t.Fatalf("undo output missing %q:\n%s", want, undoOut)
+		}
+	}
+	if got, err := os.ReadFile(aPath); err != nil || string(got) != "v2" {
+		t.Fatalf("a.txt after undo = %q (err %v), want v2", got, err)
+	}
+	if _, err := os.Stat(bPath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("b.txt should have been deleted by undo: %v", err)
+	}
+
+	undo2Out, undo2Err, code := run("undo", "2")
+	if code != 0 {
+		t.Fatalf("tern undo 2 exit %d, stderr: %s", code, undo2Err)
+	}
+	if !strings.Contains(undo2Out, "Undid 1 checkpoint turn") || !strings.Contains(undo2Out, "No more checkpoint turns to undo") {
+		t.Fatalf("undo 2 output did not stop cleanly:\n%s", undo2Out)
+	}
+	if got, err := os.ReadFile(aPath); err != nil || string(got) != "v1" {
+		t.Fatalf("a.txt after undo 2 = %q (err %v), want v1", got, err)
+	}
+
+	logOut, logErr, code = run("log")
+	if code != 0 {
+		t.Fatalf("tern log after undo exit %d, stderr: %s", code, logErr)
+	}
+	if !strings.Contains(logOut, "No checkpoint turns recorded yet.") {
+		t.Fatalf("log after undo = %s", logOut)
+	}
+}
+
+func TestPolicyCommand(t *testing.T) {
+	o := testRunOptions(t)
+	t.Setenv("TERN_PERMISSION_MODE", "")
+	t.Setenv("TERN_WEB_PERMISSION", "")
+	configDir := os.Getenv("TERN_CONFIG_DIR")
+	if err := os.MkdirAll(configDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(configDir, "config.toml"),
+		[]byte("permission_mode = \"auto-edit\"\nweb_permission = \"deny\"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	o.Args = []string{"policy"}
+	if code := runWithOptions(o); code != 0 {
+		t.Fatalf("tern policy exit %d, stderr: %s", code, o.Err.(*bytes.Buffer).String())
+	}
+	out := o.Out.(*bytes.Buffer).String()
+	for _, want := range []string{
+		"Permission mode: auto-edit",
+		"Web policy:      deny",
+		"Workspace root:",
+		o.WorkDir,
+		"~/.ssh/*",
+		"~/.aws/credentials",
+		"rm -rf /",
+		"shutdown*",
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("policy output missing %q:\n%s", want, out)
+		}
+	}
+
+	plan := o
+	planOut := &bytes.Buffer{}
+	plan.Err = &bytes.Buffer{}
+	plan.Out = planOut
+	plan.Args = []string{"policy", "--plan"}
+	if code := runWithOptions(plan); code != 0 {
+		t.Fatalf("tern policy --plan exit %d, stderr: %s", code, plan.Err.(*bytes.Buffer).String())
+	}
+	if !strings.Contains(planOut.String(), "Permission mode: plan") {
+		t.Fatalf("policy --plan output = %s", planOut.String())
 	}
 }

@@ -34,6 +34,9 @@ type cliOptions struct {
 	Resume     string
 	Model      string
 	ModelSet   bool
+	BaseURL    string
+	BaseURLSet bool
+	Local      bool
 	Plan       bool
 	Permission string
 	PermSet    bool
@@ -101,6 +104,12 @@ func runWithOptions(o runOptions) int {
 			return runUpdateCommand(o.Args[1:], o.Out, o.Err)
 		case "uninstall":
 			return runUninstallCommand(o.Args[1:], o)
+		case "undo":
+			return runUndoCommand(o.Args[1:], o)
+		case "log":
+			return runLogCommand(o.Args[1:], o)
+		case "policy":
+			return runPolicyCommand(o.Args[1:], o)
 		}
 	}
 
@@ -161,14 +170,19 @@ func runWithOptions(o runOptions) int {
 		return 1
 	}
 
-	// First-run authentication.
+	// First-run authentication. Loopback base URLs (Ollama, LM Studio, vLLM)
+	// are offline endpoints that do not need a hosted-provider API key.
 	if strings.TrimSpace(cfg.APIKey) == "" {
-		key, authErr := ensureAPIKey(o.In, o.Out, o.Err, o.StdinTTY)
-		if authErr != nil {
-			fmt.Fprintf(o.Err, "tern: %v\n", authErr)
-			return 1
+		if isLoopbackBaseURL(cfg.BaseURL) {
+			cfg.APIKey = "local"
+		} else {
+			key, authErr := ensureAPIKey(o.In, o.Out, o.Err, o.StdinTTY)
+			if authErr != nil {
+				fmt.Fprintf(o.Err, "tern: %v\n", authErr)
+				return 1
+			}
+			cfg.APIKey = key
 		}
-		cfg.APIKey = key
 	}
 
 	configDir, err := config.ConfigDir()
@@ -276,6 +290,8 @@ func parseCLI(args []string, errOut io.Writer) (*cliOptions, error) {
 	fs.BoolVar(&opts.Continue, "c", false, "continue the most recent session")
 	fs.StringVar(&opts.Resume, "resume", "", "resume a specific session id")
 	fs.StringVar(&opts.Model, "model", "", "model name")
+	fs.StringVar(&opts.BaseURL, "base-url", "", "OpenAI-compatible API base URL")
+	fs.BoolVar(&opts.Local, "local", false, "use a local OpenAI-compatible server (Ollama at http://localhost:11434/v1)")
 	fs.BoolVar(&opts.Plan, "plan", false, "start in read-only plan mode")
 	fs.StringVar(&opts.Permission, "permission", "", "permission mode: ask, auto-edit, yolo, plan")
 	fs.Float64Var(&opts.MaxCost, "max-cost", 0, "stop after this spend in USD")
@@ -295,6 +311,7 @@ func parseCLI(args []string, errOut io.Writer) (*cliOptions, error) {
 	fs.Visit(func(f *flag.Flag) { visited[f.Name] = true })
 	opts.PromptSet = visited["p"] || visited["prompt"]
 	opts.ModelSet = visited["model"]
+	opts.BaseURLSet = visited["base-url"]
 	opts.PermSet = visited["permission"]
 	opts.MaxCostSet = visited["max-cost"]
 	opts.AgentsSet = visited["max-agents"]
@@ -312,6 +329,9 @@ Usage:
   tern ext [list] [--json]
   tern ext install <path-or-git-url>
   tern ext remove <name>
+  tern undo [n]
+  tern log
+  tern policy
   tern update [--check] [--force]
   tern uninstall [--yes] [--purge] [--dry-run]
   tern version
@@ -324,6 +344,8 @@ Flags:
   -c, --continue            continue the most recent session
       --resume <id>         resume a specific session
       --model <name>        model name
+      --base-url <url>      OpenAI-compatible API base URL
+      --local               use Ollama at http://localhost:11434/v1 (no API key needed)
       --plan                start in read-only plan mode
       --permission <mode>   ask, auto-edit, yolo or plan
       --max-cost <usd>      stop after this spend
@@ -336,6 +358,9 @@ Subcommands:
   config                    print the effective configuration
   stats                     show historical usage and activity
   ext                       list, install or remove extensions
+  undo [n]                  roll back the last n checkpoint turns
+  log                       list checkpoint turns for the latest session
+  policy                    show the effective permission policy
   update                    update the tern binary
   uninstall                 remove the tern binary
   version                   print the version`)
@@ -345,6 +370,13 @@ func loadConfig(opts *cliOptions, workDir string) (*config.Config, error) {
 	flags := &config.FlagOverrides{}
 	if opts.ModelSet {
 		flags.Model = &opts.Model
+	}
+	switch {
+	case opts.BaseURLSet:
+		flags.BaseURL = &opts.BaseURL
+	case opts.Local:
+		local := defaultLocalBaseURL
+		flags.BaseURL = &local
 	}
 	if opts.Plan {
 		mode := "plan"

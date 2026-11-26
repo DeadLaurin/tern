@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/url"
 	"os"
 	"strings"
 
@@ -12,6 +13,30 @@ import (
 
 	"github.com/tern-agent/tern/internal/config"
 )
+
+// defaultLocalBaseURL is the OpenAI-compatible endpoint exposed by a default
+// Ollama installation.
+const defaultLocalBaseURL = "http://localhost:11434/v1"
+
+// isLoopbackBaseURL reports whether rawURL targets a loopback host. Local
+// OpenAI-compatible servers (Ollama, LM Studio, vLLM, llama.cpp) usually run
+// without authentication, so tern must not demand DEEPSEEK_API_KEY for them.
+func isLoopbackBaseURL(rawURL string) bool {
+	rawURL = strings.TrimSpace(rawURL)
+	if rawURL == "" {
+		return false
+	}
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		return false
+	}
+	host := strings.ToLower(strings.TrimSpace(u.Hostname()))
+	switch host {
+	case "localhost", "127.0.0.1", "::1":
+		return true
+	}
+	return false
+}
 
 // ensureAPIKey loads the DeepSeek API key, prompting exactly once on an
 // interactive terminal when none is configured. Non-interactive sessions get a
