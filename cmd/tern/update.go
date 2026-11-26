@@ -96,21 +96,28 @@ func runUpdateCommand(args []string, out, errOut io.Writer) int {
 	}
 
 	if checkOnly {
-		tag, available, err := checkForUpdate(ctx, opts)
+		release, available, err := checkForUpdateDetails(ctx, opts)
 		if err != nil {
 			fmt.Fprintf(errOut, "tern update: %v\n", err)
 			return 1
 		}
 		if available {
-			fmt.Fprintf(out, "Update available: %s (current %s)\n", tag, version)
+			fmt.Fprintf(out, "Update available: %s (current %s)\n", release.Tag, version)
+			printReleaseNotes(out, release.Tag, release.Body)
 		} else {
-			fmt.Fprintf(out, "tern is already up to date (%s)\n", tag)
+			fmt.Fprintf(out, "tern is already up to date (%s)\n", release.Tag)
 		}
 		return 0
 	}
 
 	fmt.Fprintf(out, "Checking for tern updates from %s...\n", repo)
-	tag, updated, err := performUpdate(ctx, opts)
+	applyUpdateDefaults(&opts)
+	release, err := latestRelease(ctx, opts.Client, opts.APIBase, opts.Repo)
+	if err != nil {
+		fmt.Fprintf(errOut, "tern update: %v\n", err)
+		return 1
+	}
+	tag, updated, err := performUpdateFromRelease(ctx, opts, release)
 	if err != nil {
 		fmt.Fprintf(errOut, "tern update: %v\n", err)
 		return 1
@@ -120,7 +127,74 @@ func runUpdateCommand(args []string, out, errOut io.Writer) int {
 		return 0
 	}
 	fmt.Fprintf(out, "Updated tern to %s.\n", tag)
+	printReleaseNotes(out, tag, release.Body)
 	return 0
+}
+
+// releaseNotesMaxLines caps how much of a release body is printed.
+const releaseNotesMaxLines = 16
+
+// printReleaseNotes renders a release body under a "What's new" header,
+// skipping the block entirely when the body is empty.
+func printReleaseNotes(out io.Writer, tag, body string) {
+	notes := formatReleaseNotes(body, releaseNotesMaxLines)
+	if notes == "" {
+		return
+	}
+	fmt.Fprintf(out, "What's new in %s:\n%s\n", tag, notes)
+}
+
+// formatReleaseNotes trims empty edges, collapses repeated blank lines,
+// indents the body, and caps it at maxLines (a value <= 0 means no cap).
+func formatReleaseNotes(body string, maxLines int) string {
+	body = strings.ReplaceAll(body, "\r\n", "\n")
+	body = strings.ReplaceAll(body, "\r", "\n")
+
+	cleaned := make([]string, 0)
+	blank := false
+	for _, line := range strings.Split(body, "\n") {
+		line = strings.TrimRight(line, " \t")
+		if strings.TrimSpace(line) == "" {
+			if len(cleaned) == 0 || blank {
+				continue
+			}
+			blank = true
+			cleaned = append(cleaned, "")
+			continue
+		}
+		blank = false
+		cleaned = append(cleaned, line)
+	}
+	for len(cleaned) > 0 && cleaned[len(cleaned)-1] == "" {
+		cleaned = cleaned[:len(cleaned)-1]
+	}
+
+	truncated := false
+	if maxLines > 0 && len(cleaned) > maxLines {
+		cleaned = cleaned[:maxLines]
+		for len(cleaned) > 0 && cleaned[len(cleaned)-1] == "" {
+			cleaned = cleaned[:len(cleaned)-1]
+		}
+		truncated = true
+	}
+	if len(cleaned) == 0 {
+		return ""
+	}
+
+	var b strings.Builder
+	for _, line := range cleaned {
+		if line == "" {
+			b.WriteString("\n")
+			continue
+		}
+		b.WriteString("  ")
+		b.WriteString(line)
+		b.WriteString("\n")
+	}
+	if truncated {
+		b.WriteString("  ...\n")
+	}
+	return strings.TrimSuffix(b.String(), "\n")
 }
 
 func applyUpdateDefaults(opts *updateOptions) {
@@ -147,21 +221,38 @@ func applyUpdateDefaults(opts *updateOptions) {
 // checkForUpdate reports the latest release tag and whether it differs from
 // the current version without downloading or replacing anything.
 func checkForUpdate(ctx context.Context, opts updateOptions) (string, bool, error) {
-	applyUpdateDefaults(&opts)
-	tag, err := latestTag(ctx, opts.Client, opts.APIBase, opts.Repo)
+	release, available, err := checkForUpdateDetails(ctx, opts)
 	if err != nil {
 		return "", false, err
 	}
-	return tag, normalizeVersion(tag) != normalizeVersion(opts.CurrentVersion), nil
+	return release.Tag, available, nil
+}
+
+// checkForUpdateDetails is checkForUpdate plus the release body, so callers can
+// show release notes alongside the availability notice.
+func checkForUpdateDetails(ctx context.Context, opts updateOptions) (releaseInfo, bool, error) {
+	applyUpdateDefaults(&opts)
+	release, err := latestRelease(ctx, opts.Client, opts.APIBase, opts.Repo)
+	if err != nil {
+		return releaseInfo{}, false, err
+	}
+	available := normalizeVersion(release.Tag) != normalizeVersion(opts.CurrentVersion)
+	return release, available, nil
 }
 
 func performUpdate(ctx context.Context, opts updateOptions) (string, bool, error) {
 	applyUpdateDefaults(&opts)
-
-	tag, err := latestTag(ctx, opts.Client, opts.APIBase, opts.Repo)
+	release, err := latestRelease(ctx, opts.Client, opts.APIBase, opts.Repo)
 	if err != nil {
 		return "", false, err
 	}
+	return performUpdateFromRelease(ctx, opts, release)
+}
+
+// performUpdateFromRelease installs an already-fetched release, avoiding a
+// second API call when the caller also needs its release notes.
+func performUpdateFromRelease(ctx context.Context, opts updateOptions, release releaseInfo) (string, bool, error) {
+	tag := release.Tag
 	if normalizeVersion(tag) == normalizeVersion(opts.CurrentVersion) && !opts.Force {
 		return tag, false, nil
 	}
@@ -306,34 +397,50 @@ func updateAssetName(version, goos, goarch string) string {
 	return fmt.Sprintf("tern_%s_%s_%s.%s", version, goos, goarch, ext)
 }
 
+// releaseInfo is the subset of a GitHub release tern needs.
+type releaseInfo struct {
+	Tag  string
+	Body string
+}
+
 func latestTag(ctx context.Context, client *http.Client, apiBase, repo string) (string, error) {
+	release, err := latestRelease(ctx, client, apiBase, repo)
+	if err != nil {
+		return "", err
+	}
+	return release.Tag, nil
+}
+
+// latestRelease fetches the latest published release, including its notes.
+func latestRelease(ctx context.Context, client *http.Client, apiBase, repo string) (releaseInfo, error) {
 	url := fmt.Sprintf("%s/repos/%s/releases/latest", strings.TrimRight(apiBase, "/"), repo)
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
-		return "", err
+		return releaseInfo{}, err
 	}
 	req.Header.Set("Accept", "application/vnd.github+json")
 	req.Header.Set("User-Agent", "tern-updater")
 	resp, err := client.Do(req)
 	if err != nil {
-		return "", fmt.Errorf("query latest release: %w", err)
+		return releaseInfo{}, fmt.Errorf("query latest release: %w", err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 4<<10))
-		return "", fmt.Errorf("query latest release: %s: %s", resp.Status, strings.TrimSpace(string(body)))
+		return releaseInfo{}, fmt.Errorf("query latest release: %s: %s", resp.Status, strings.TrimSpace(string(body)))
 	}
 	var payload struct {
 		TagName string `json:"tag_name"`
+		Body    string `json:"body"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
-		return "", fmt.Errorf("decode latest release: %w", err)
+		return releaseInfo{}, fmt.Errorf("decode latest release: %w", err)
 	}
 	payload.TagName = strings.TrimSpace(payload.TagName)
 	if payload.TagName == "" {
-		return "", errors.New("latest release has no tag_name")
+		return releaseInfo{}, errors.New("latest release has no tag_name")
 	}
-	return payload.TagName, nil
+	return releaseInfo{Tag: payload.TagName, Body: payload.Body}, nil
 }
 
 func download(ctx context.Context, client *http.Client, url string) ([]byte, error) {

@@ -91,6 +91,33 @@ jobs:
           echo "Release assets:"
           ls -lh "$dist"
 
+      - name: Extract release notes from CHANGELOG
+        id: notes
+        shell: bash
+        env:
+          TAG: ${{ steps.tag.outputs.tag }}
+        run: |
+          set -euo pipefail
+
+          notes="${GITHUB_WORKSPACE}/dist/RELEASE_NOTES.md"
+          if [ -f CHANGELOG.md ]; then
+            awk -v tag="${TAG}" '
+              BEGIN { header = "## [" tag "]" }
+              !capture && index($0, header) == 1 { capture = 1; next }
+              capture && index($0, "## [") == 1 { exit }
+              capture { print }
+            ' CHANGELOG.md > "$notes"
+          fi
+
+          if [ -s "$notes" ]; then
+            echo "Publishing release notes from CHANGELOG.md for ${TAG}"
+            echo "body_path=${notes}" >> "$GITHUB_OUTPUT"
+          else
+            rm -f "$notes"
+            echo "No CHANGELOG.md section for ${TAG}; falling back to generated release notes"
+            echo "body_path=" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Publish GitHub release
         uses: softprops/action-gh-release@v2
         with:
@@ -98,6 +125,7 @@ jobs:
           name: ${{ steps.tag.outputs.tag }}
           files: dist/*
           fail_on_unmatched_files: true
-          generate_release_notes: true
+          body_path: ${{ steps.notes.outputs.body_path }}
+          generate_release_notes: ${{ steps.notes.outputs.body_path == '' }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
