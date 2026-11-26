@@ -359,6 +359,8 @@ func (m *Manager) Run(ctx context.Context, task Task) AgentReport {
 	maxSteps := m.cfg.MaxSteps
 	if task.MaxSteps > 0 {
 		maxSteps = task.MaxSteps
+	} else if cfgPerm != nil && cfgPerm.Mode() == permission.ModeYolo && (maxSteps <= 0 || maxSteps == config.DefaultMaxSteps) {
+		maxSteps = 1000
 	}
 	model := strings.TrimSpace(task.Model)
 	if model == "" {

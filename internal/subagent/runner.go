@@ -201,6 +201,9 @@ func (r *Runner) Run(ctx context.Context) (report AgentReport) {
 	if maxSteps <= 0 {
 		maxSteps = 50
 	}
+	if r.Permission != nil && r.Permission.Mode() == permission.ModeYolo && r.Task.MaxSteps <= 0 && (r.MaxSteps <= 0 || r.MaxSteps == 50) {
+		maxSteps = 1000
+	}
 
 	system := provider.Message{Role: provider.RoleSystem, Content: r.Definition.SystemPrompt}
 	userText := r.Task.Prompt

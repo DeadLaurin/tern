@@ -420,6 +420,9 @@ func (a *Agent) RunTurn(ctx context.Context, userInput string, attachments []pro
 	if maxSteps <= 0 {
 		maxSteps = config.DefaultMaxSteps
 	}
+	if a.Permissions != nil && a.Permissions.Mode() == permission.ModeYolo && (a.Config.MaxSteps <= 0 || a.Config.MaxSteps == config.DefaultMaxSteps) {
+		maxSteps = 1000
+	}
 	steps := 0
 	compacted := false
 
