@@ -30,6 +30,7 @@ const (
 	modalStats
 	modalSkills
 	modalMCP
+	modalExt
 	modalHelp
 	modalAgentPeek
 )
@@ -90,6 +91,8 @@ type modalState struct {
 
 	mcp []ext.MCPStatus
 
+	extensions []*ext.Extension
+
 	helpItems []helpItem
 
 	// Agent peek modal state. peekAgentID names the sub-agent whose child
@@ -125,6 +128,8 @@ func (m *Model) handleModalKey(msg tea.KeyMsg) tea.Cmd {
 		return m.handleSkillsModalKey(msg)
 	case modalMCP:
 		return m.handleMCPModalKey(msg)
+	case modalExt:
+		return m.handleExtModalKey(msg)
 	case modalHelp:
 		return m.handleHelpModalKey(msg)
 	case modalAgentPeek:
@@ -1338,6 +1343,153 @@ func (m *Model) skillsModalView() string {
 }
 
 // ---------------------------------------------------------------------------
+// Extensions
+// ---------------------------------------------------------------------------
+
+func (m *Model) openExtModal() {
+	m.setModal(modalExt)
+	m.refreshExtensions()
+	m.statusMsg = "Extensions"
+}
+
+func (m *Model) refreshExtensions() {
+	extensions, warnings := ext.ListAllExtensions(m.opts.WorkDir, m.opts.GlobalConfigDir)
+	m.modal.extensions = extensions
+	if len(warnings) > 0 {
+		m.modal.notice = strings.Join(warnings, " · ")
+	} else {
+		m.modal.notice = ""
+	}
+	m.clampExtIndex()
+	m.dirty = true
+}
+
+func (m *Model) clampExtIndex() {
+	n := len(m.modal.extensions)
+	if n == 0 {
+		m.modal.index = 0
+		return
+	}
+	if m.modal.index < 0 {
+		m.modal.index = n - 1
+	}
+	if m.modal.index >= n {
+		m.modal.index = 0
+	}
+}
+
+func (m *Model) handleExtModalKey(msg tea.KeyMsg) tea.Cmd {
+	switch msg.Type {
+	case tea.KeyEsc:
+		m.closeModal()
+		return nil
+	case tea.KeyUp:
+		m.modal.index--
+		m.clampExtIndex()
+		m.dirty = true
+		return nil
+	case tea.KeyDown:
+		m.modal.index++
+		m.clampExtIndex()
+		m.dirty = true
+		return nil
+	case tea.KeyRunes:
+		switch strings.ToLower(string(msg.Runes)) {
+		case "r":
+			m.refreshExtensions()
+			m.modal.notice = "Extensions refreshed."
+			m.statusMsg = "Extensions refreshed"
+		}
+		return nil
+	}
+	return nil
+}
+
+// extCountLabel renders a compact "N tools · N hooks · N mcp" count summary.
+func extCountLabel(item *ext.Extension) string {
+	if item == nil {
+		return ""
+	}
+	parts := make([]string, 0, 3)
+	if n := len(item.Manifest.Tools); n > 0 {
+		parts = append(parts, fmt.Sprintf("%d tool(s)", n))
+	}
+	if n := len(item.Manifest.Hooks); n > 0 {
+		parts = append(parts, fmt.Sprintf("%d hook(s)", n))
+	}
+	if n := len(item.Manifest.MCP); n > 0 {
+		parts = append(parts, fmt.Sprintf("%d mcp", n))
+	}
+	if len(parts) == 0 {
+		return "no tools"
+	}
+	return strings.Join(parts, " · ")
+}
+
+func (m *Model) extModalView() string {
+	m.modalRows = nil
+	var b strings.Builder
+	if len(m.modal.extensions) == 0 {
+		b.WriteString(m.st.paint(m.st.dim, "No extensions installed."))
+		b.WriteString("\n\n")
+		b.WriteString(m.st.paint(m.st.bold, "Install locations") + "\n")
+		b.WriteString("  " + m.st.paint(m.st.dim, "global  ") + "~/.config/tern/extensions/\n")
+		b.WriteString("  " + m.st.paint(m.st.dim, "project ") + "./.tern/extensions/\n")
+		b.WriteString("\n" + m.st.paint(m.st.bold, "Install") + "\n")
+		b.WriteString("  " + m.st.paint(m.st.teal, "tern ext install <path-or-git-url>"))
+	} else {
+		m.clampExtIndex()
+		limit := maxInt(4, minInt(len(m.modal.extensions), m.modalRowLimit()/2))
+		start, end := windowRange(len(m.modal.extensions), m.modal.index, limit)
+		if start > 0 {
+			b.WriteString(m.st.paint(m.st.dim, fmt.Sprintf("  … %d above\n", start)))
+		}
+		for i := start; i < end; i++ {
+			m.addModalRow(strings.Count(b.String(), "\n"), i)
+			item := m.modal.extensions[i]
+			marker := "  "
+			style := m.st.dim
+			if i == m.modal.index {
+				marker = "▸ "
+				style = m.st.selected
+				if m.st.plain {
+					marker = "> "
+				}
+			}
+			version := emptyFallback(item.Manifest.Version, "-")
+			source := emptyFallback(item.Source, ext.ExtensionSourceProject)
+			badge := "enabled"
+			if !item.Manifest.IsEnabled() {
+				badge = "disabled"
+			}
+			line := fmt.Sprintf("%s%-18s %-8s %-7s %-8s  %s",
+				marker, truncateCell(item.Manifest.Name, 18), truncateCell(version, 8),
+				truncateCell(source, 7), truncateCell(badge, 8),
+				truncateCell(extCountLabel(item), maxInt(12, m.modalTextWidth()-48)))
+			b.WriteString(m.st.paint(style, truncateCell(line, maxInt(30, m.modalTextWidth()))))
+			b.WriteString("\n")
+		}
+		if end < len(m.modal.extensions) {
+			b.WriteString(m.st.paint(m.st.dim, fmt.Sprintf("  … %d below\n", len(m.modal.extensions)-end)))
+		}
+		selected := m.modal.extensions[m.modal.index]
+		description := strings.TrimSpace(selected.Manifest.Description)
+		if description == "" {
+			description = "(no description)"
+		}
+		b.WriteString("\n" + m.st.paint(m.st.bold, "Description") + "\n")
+		b.WriteString(m.st.paint(m.st.dim, indentLines(wrapPlainCell(description, maxInt(20, m.modalTextWidth()-4)), "  ")))
+		b.WriteString("\n\n")
+		b.WriteString(m.st.paint(m.st.dim, "source: "+selected.Source+"  ·  dir: "+selected.Dir))
+	}
+	if m.modal.notice != "" {
+		b.WriteString("\n\n" + m.st.paint(m.st.amber, m.modal.notice))
+	}
+	return m.modalFrame("Extensions", strings.TrimRight(b.String(), "\n"),
+		"↑/↓ select · r refresh · esc close")
+}
+
+// ---------------------------------------------------------------------------
 // MCP servers
 // ---------------------------------------------------------------------------
 
@@ -1526,6 +1678,7 @@ func (m *Model) helpItems() []helpItem {
 		{name: "rewind", usage: "/rewind [turn]", detail: "list turns or restore the state before a turn", takesArgs: true},
 		{name: "skills", usage: "/skills [name]", detail: "browse skills or show one directly"},
 		{name: "mcp", usage: "/mcp", detail: "MCP servers, tools and reconnect"},
+		{name: "ext", usage: "/ext", detail: "browse installed extensions, their tools, hooks and MCP servers"},
 		{name: "config", usage: "/config", detail: "show the effective configuration"},
 		{name: "clear", usage: "/clear", detail: "clear the transcript view"},
 		{name: "undo", usage: "/undo", detail: "restore files from the latest checkpoint"},
@@ -1659,6 +1812,8 @@ func (m *Model) modalView() string {
 		return m.skillsModalView()
 	case modalMCP:
 		return m.mcpModalView()
+	case modalExt:
+		return m.extModalView()
 	case modalHelp:
 		return m.helpModalView()
 	case modalAgentPeek:

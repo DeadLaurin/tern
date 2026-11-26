@@ -211,6 +211,10 @@ type Model struct {
 
 	files []string
 
+	// repoSummary is the quiet one-line repository index summary shown in the
+	// welcome view. It is computed once at construction and omitted when empty.
+	repoSummary string
+
 	dirty      bool
 	content    string
 	lastWidth  int
@@ -1555,6 +1559,11 @@ func (m *Model) renderWelcome() string {
 	lines = append(lines,
 		m.st.paint(m.st.heading, "tern"),
 		m.st.paint(m.st.accent, modelLabel),
+	)
+	if strings.TrimSpace(m.repoSummary) != "" {
+		lines = append(lines, dim(m.repoSummary))
+	}
+	lines = append(lines,
 		"",
 		dim(key("Ctrl+P")+dim(" model  ·  ")+key("Shift+Tab")+dim(" effort  ·  ")+key("/help")+dim(" commands")),
 	)

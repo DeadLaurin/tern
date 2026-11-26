@@ -130,6 +130,11 @@ func New(opts Options) *Model {
 		if cmds, err := terncontext.LoadCommands(opts.WorkDir, opts.GlobalConfigDir); err == nil {
 			m.commands = cmds
 		}
+		// A cheap repository index keeps the welcome view informative without
+		// delaying startup; failures simply leave the line out.
+		if index, err := terncontext.IndexRepo(opts.WorkDir, 80); err == nil && index != nil {
+			m.repoSummary = index.Summary()
+		}
 	}
 
 	if m.opts.Agent != nil {

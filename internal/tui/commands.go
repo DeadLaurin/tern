@@ -30,6 +30,7 @@ var builtinCommandNames = []string{
 	"cost",
 	"effort",
 	"export",
+	"ext",
 	"fork",
 	"help",
 	"mcp",
@@ -147,6 +148,10 @@ func (m *Model) handleSlash(line string, attachments []provider.ContentPart) tea
 		m.openMCPModal()
 		return nil
 
+	case "ext":
+		m.openExtModal()
+		return nil
+
 	case "stats":
 		m.openStatsModal()
 		return nil
@@ -236,6 +241,7 @@ func (m *Model) helpText() string {
 		"/export [md|html] [path]": "export the session transcript",
 		"/skills [name]":           "browse skills or show one directly",
 		"/mcp":                     "MCP servers, tools and reconnect",
+		"/ext":                     "browse installed extensions, their tools, hooks and MCP servers",
 		"/config":                  "show the effective configuration",
 		"/quit":                    "exit tern",
 	}

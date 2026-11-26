@@ -903,6 +903,73 @@ func TestSkillsPanelAndTemplateCreation(t *testing.T) {
 	}
 }
 
+func TestExtPanelEmptyAndInstalled(t *testing.T) {
+	t.Run("empty", func(t *testing.T) {
+		m := newTestModel(t, Options{})
+		submitText(t, m, "/ext")
+		if m.activeModal != modalExt {
+			t.Fatal("/ext did not open the extensions panel")
+		}
+		view := m.View()
+		for _, want := range []string{"~/.config/tern/extensions/", "./.tern/extensions/", "tern ext install <path-or-git-url>"} {
+			if !strings.Contains(view, want) {
+				t.Fatalf("empty extensions view missing %q:\n%s", want, view)
+			}
+		}
+		press(t, m, tea.KeyEsc)
+		if m.activeModal != modalNone {
+			t.Fatal("esc did not close the extensions panel")
+		}
+	})
+
+	t.Run("project extension", func(t *testing.T) {
+		dir := t.TempDir()
+		extDir := filepath.Join(dir, ".tern", "extensions", "demo")
+		if err := os.MkdirAll(extDir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		manifest := "name = \"demo\"\nversion = \"1.2.3\"\ndescription = \"Demo extension for tests\"\n\n[[tools]]\nname = \"hello\"\ncommand = \"echo\"\n"
+		if err := os.WriteFile(filepath.Join(extDir, "extension.toml"), []byte(manifest), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		m := newTestModel(t, Options{WorkDir: dir})
+		submitText(t, m, "/ext")
+		if m.activeModal != modalExt {
+			t.Fatal("/ext did not open the extensions panel")
+		}
+		view := m.View()
+		for _, want := range []string{"demo", "1.2.3", "project", "enabled", "1 tool(s)", "Demo extension for tests"} {
+			if !strings.Contains(view, want) {
+				t.Fatalf("extensions view missing %q:\n%s", want, view)
+			}
+		}
+		press(t, m, tea.KeyEsc)
+		if m.activeModal != modalNone {
+			t.Fatal("esc did not close the extensions panel")
+		}
+	})
+}
+
+func TestWelcomeShowsRepoSummary(t *testing.T) {
+	dir := t.TempDir()
+	for _, name := range []string{"main.go", "util.go"} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte("package main\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	m := newTestModel(t, Options{WorkDir: dir})
+	if !strings.Contains(m.repoSummary, "indexed") {
+		t.Fatalf("repo summary not computed: %q", m.repoSummary)
+	}
+	welcome := m.renderWelcome()
+	if !strings.Contains(welcome, m.repoSummary) {
+		t.Fatalf("welcome view missing repo summary %q:\n%s", m.repoSummary, welcome)
+	}
+	if !strings.Contains(welcome, ".gitignore respected") {
+		t.Fatalf("welcome repo summary missing ignore note:\n%s", welcome)
+	}
+}
+
 func TestMCPPanelEmptyAndConfigured(t *testing.T) {
 	t.Run("empty", func(t *testing.T) {
 		m := newTestModel(t, Options{})

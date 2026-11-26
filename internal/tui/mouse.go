@@ -296,6 +296,8 @@ func (m *Model) clampActiveModalIndex() {
 			m.modal.index = clampInt(m.modal.index, 0, n-1)
 			m.refreshMCPStatus()
 		}
+	case modalExt:
+		m.clampExtIndex()
 	case modalHelp:
 		m.clampHelpIndex()
 	}
