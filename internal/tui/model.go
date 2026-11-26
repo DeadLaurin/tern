@@ -43,6 +43,14 @@ const (
 	thinkingHidden
 )
 
+type toolsMode int
+
+const (
+	toolsCompact toolsMode = iota
+	toolsExpanded
+	toolsHidden
+)
+
 type entryKind int
 
 const (
@@ -65,6 +73,7 @@ type transcriptEntry struct {
 	isError  bool
 	elapsed  time.Duration
 	finished bool
+	expanded bool
 }
 
 type agentBlock struct {
@@ -149,7 +158,22 @@ type Model struct {
 	sessionStart  time.Time
 
 	thinking       thinkingMode
+	tools          toolsMode
 	showToolDetail bool
+
+	// Transcript drag-to-select state (document coordinates) and optional
+	// mouse-capture toggle (/mouse).
+	selDragging         bool
+	selActive           bool
+	selStartLine        int
+	selStartCol         int
+	selEndLine          int
+	selEndCol           int
+	selPressX           int
+	selPressY           int
+	selToggledReasoning bool
+	selPrevThinking     thinkingMode
+	mouseDisabled       bool
 
 	// previousPermissionMode is remembered when YOLO is enabled so toggling it
 	// off restores the mode the user was in before.
@@ -412,6 +436,18 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 		}
+		if m.activeModal == modalChangelog {
+			switch {
+			case msg.Action == tea.MouseActionPress && msg.Button == tea.MouseButtonWheelUp,
+				msg.Type == tea.MouseWheelUp:
+				m.modal.changelogScroll = maxInt(0, m.modal.changelogScroll-3)
+				return m, nil
+			case msg.Action == tea.MouseActionPress && msg.Button == tea.MouseButtonWheelDown,
+				msg.Type == tea.MouseWheelDown:
+				m.modal.changelogScroll += 3
+				return m, nil
+			}
+		}
 		switch {
 		case msg.Action == tea.MouseActionPress && msg.Button == tea.MouseButtonWheelUp,
 			msg.Type == tea.MouseWheelUp:
@@ -424,7 +460,16 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.followTail = m.viewport.AtBottom()
 			return m, nil
 		}
+		if msg.Action == tea.MouseActionMotion && m.selDragging {
+			m.updateTranscriptSelection(msg)
+			return m, nil
+		}
+		if msg.Action == tea.MouseActionRelease && m.selDragging {
+			m.finishTranscriptSelection(msg)
+			return m, nil
+		}
 		if msg.Action == tea.MouseActionPress {
+			m.clearSelection()
 			switch msg.Button {
 			case tea.MouseButtonLeft:
 				if m.handleLeftClick(msg) {
@@ -442,6 +487,9 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, cmd
 
 	case tea.KeyMsg:
+		if m.selActive {
+			m.clearSelection()
+		}
 		return m, m.handleKey(msg)
 	}
 	return m, nil
@@ -1608,7 +1656,11 @@ func (m *Model) rebuildContent() {
 	}
 	m.computeContextTokens()
 	m.content = m.renderTranscript()
-	m.viewport.SetContent(m.content)
+	rendered := m.content
+	if m.selActive {
+		rendered = m.applySelectionHighlight(rendered)
+	}
+	m.viewport.SetContent(rendered)
 	m.lastWidth = m.width
 	m.dirty = false
 	if m.followTail {
@@ -1764,53 +1816,75 @@ func (m *Model) renderEntry(entry *transcriptEntry) string {
 			return ""
 		}
 		n := len([]rune(entry.text))
-		if m.thinking == thinkingCollapsed {
-			label := fmt.Sprintf("▸ Thought · %d chars  (^T expand)", n)
+		if m.thinking == thinkingCollapsed && !entry.expanded {
+			label := fmt.Sprintf("  ▸ Thought · %d chars", n)
 			return m.st.paint(m.st.reasoning, label)
 		}
-		header := m.st.paint(m.st.reasoning, "▾ Thought")
-		body := RenderMarkdown(entry.text, maxInt(20, width-2), m.st.plain)
+		header := m.st.paint(m.st.reasoning, "  ▾ Thought")
+		body := RenderMarkdown(entry.text, maxInt(20, width-4), m.st.plain)
 		lines := strings.Split(body, "\n")
 		for i := range lines {
-			lines[i] = m.st.paint(m.st.reasoning, "│ ") + m.st.paint(m.st.reasoning, lines[i])
+			lines[i] = m.st.paint(m.st.border, "  │ ") + m.st.paint(m.st.reasoning, lines[i])
 		}
 		return header + "\n" + strings.Join(lines, "\n")
 
 	case entryTool:
-		marker := "⚙ "
-		if m.st.plain {
-			marker = "* "
+		if m.tools == toolsHidden {
+			return ""
 		}
-		summary := toolSummary(entry.toolName, entry.args)
-		head := m.st.paint(m.st.toolName, marker+entry.toolName)
+		glyph := "◐"
+		glyphStyle := m.st.amber
+		switch {
+		case entry.isError:
+			glyph = "✗"
+			glyphStyle = m.st.error
+		case entry.finished:
+			glyph = "✓"
+			glyphStyle = m.st.sage
+		}
+		if m.st.plain {
+			switch {
+			case entry.isError:
+				glyph = "!"
+			case entry.finished:
+				glyph = "+"
+			default:
+				glyph = "*"
+			}
+		}
+		summary := formatToolSummary(entry.toolName, entry.args, m.opts.WorkDir)
+		head := "  " + m.st.paint(glyphStyle, glyph) + " " + m.st.paint(m.st.statusValue, entry.toolName)
 		if summary != "" {
-			head += m.st.paint(m.st.dim, " · "+summary)
+			head += "  " + m.st.paint(m.st.dim, summary)
 		}
 		if entry.finished && entry.elapsed > 0 {
-			head += m.st.paint(m.st.dim, fmt.Sprintf(" · %s", formatDuration(entry.elapsed)))
+			head += "  " + m.st.paint(m.st.dim, formatDuration(entry.elapsed))
 		} else if !entry.finished && !entry.started.IsZero() {
-			head += m.st.paint(m.st.dim, fmt.Sprintf(" · %s", formatDuration(time.Since(entry.started))))
+			head += "  " + m.st.paint(m.st.dim, formatDuration(time.Since(entry.started)))
 		}
 		if entry.isError {
-			head += m.st.paint(m.st.error, " · failed")
+			head += "  " + m.st.paint(m.st.error, "failed")
 		}
-		if !m.showToolDetail {
+		if m.tools != toolsExpanded && !m.showToolDetail && !entry.expanded {
 			return head
 		}
 		var b strings.Builder
 		b.WriteString(head)
+		rail := m.st.paint(m.st.border, "  │ ")
 		if strings.TrimSpace(entry.args) != "" && entry.args != "{}" && entry.args != "null" {
-			b.WriteString("\n")
-			b.WriteString(m.st.paint(m.st.dim, indentLines(wrapPlainCell(entry.args, width-4), "    ")))
+			for _, line := range strings.Split(wrapPlainCell(entry.args, maxInt(20, width-6)), "\n") {
+				b.WriteString("\n" + rail + m.st.paint(m.st.dim, line))
+			}
 		}
 		if strings.TrimSpace(entry.output) != "" {
-			b.WriteString("\n")
 			output := truncateLines(entry.output, 20)
 			style := m.st.dim
 			if entry.isError {
 				style = m.st.error
 			}
-			b.WriteString(m.st.paint(style, indentLines(wrapPlainCell(output, width-4), "    ")))
+			for _, line := range strings.Split(wrapPlainCell(output, maxInt(20, width-6)), "\n") {
+				b.WriteString("\n" + rail + m.st.paint(style, line))
+			}
 		}
 		return b.String()
 
@@ -2547,6 +2621,10 @@ func (m *Model) openExternalEditor() tea.Cmd {
 
 // toolSummary renders a one-line description of a tool call.
 func toolSummary(name, rawArgs string) string {
+	return formatToolSummary(name, rawArgs, "")
+}
+
+func formatToolSummary(name, rawArgs, workDir string) string {
 	args := strings.TrimSpace(rawArgs)
 	if args == "" || args == "{}" || args == "null" {
 		return ""
@@ -2555,14 +2633,64 @@ func toolSummary(name, rawArgs string) string {
 	if err := json.Unmarshal([]byte(args), &decoded); err != nil {
 		return truncateCell(args, 80)
 	}
-	for _, key := range []string{"command", "path", "file_path", "pattern", "query", "url", "description", "name"} {
+	for _, key := range []string{"command", "path", "file_path", "question", "pattern", "query", "url", "description", "name"} {
 		if value, ok := decoded[key]; ok {
 			if s, ok := value.(string); ok && strings.TrimSpace(s) != "" {
-				return truncateCell(s, 90)
+				if key == "path" || key == "file_path" {
+					s = shortenDisplayPath(s, workDir)
+					if name == "read" {
+						s = appendReadRange(s, decoded)
+					}
+				}
+				return truncateCell(s, 84)
 			}
 		}
 	}
 	return truncateCell(args, 80)
+}
+
+func shortenDisplayPath(p, workDir string) string {
+	if workDir != "" {
+		cleanWD := filepath.Clean(workDir)
+		cleanP := filepath.Clean(p)
+		if rel, err := filepath.Rel(cleanWD, cleanP); err == nil && !strings.HasPrefix(rel, "..") {
+			return rel
+		}
+	}
+	if home, err := os.UserHomeDir(); err == nil && home != "" {
+		if p == home {
+			return "~"
+		}
+		if strings.HasPrefix(p, home+string(filepath.Separator)) {
+			return "~" + p[len(home):]
+		}
+	}
+	return p
+}
+
+func appendReadRange(path string, decoded map[string]any) string {
+	offset, hasOff := intFromAny(decoded["offset"])
+	limit, hasLim := intFromAny(decoded["limit"])
+	if !hasOff && !hasLim {
+		return path
+	}
+	if offset <= 0 {
+		offset = 1
+	}
+	if hasLim && limit > 0 {
+		return fmt.Sprintf("%s:%d-%d", path, offset, offset+limit-1)
+	}
+	return fmt.Sprintf("%s:%d+", path, offset)
+}
+
+func intFromAny(v any) (int, bool) {
+	switch n := v.(type) {
+	case float64:
+		return int(n), true
+	case int:
+		return n, true
+	}
+	return 0, false
 }
 
 func addUsage(a, b provider.Usage) provider.Usage {

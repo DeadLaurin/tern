@@ -23,10 +23,12 @@ import (
 // and /help.
 var builtinCommandNames = []string{
 	"agents",
+	"changelog",
 	"clear",
 	"compact",
 	"config",
 	"context",
+	"copy",
 	"cost",
 	"effort",
 	"export",
@@ -35,8 +37,10 @@ var builtinCommandNames = []string{
 	"help",
 	"mcp",
 	"model",
+	"mouse",
 	"name",
 	"plan",
+	"plugins",
 	"queue",
 	"quit",
 	"rewind",
@@ -46,27 +50,32 @@ var builtinCommandNames = []string{
 	"steer",
 	"theme",
 	"thinking",
+	"tools",
 	"undo",
 	"version",
 	"yolo",
 }
 
 var builtinCommandDescriptions = map[string]string{
-	"agents":   "Inspect sub-agents",
-	"clear":    "Clear transcript view",
+	"agents":    "Inspect sub-agents",
+	"changelog": "Show what's new in tern",
+	"clear":     "Clear transcript view",
 	"compact":  "Compact conversation context",
 	"config":   "Show effective settings",
 	"context":  "Show context token usage",
+	"copy":     "Copy last assistant response",
 	"cost":     "Show session cost & cache",
 	"effort":   "Set reasoning effort",
 	"export":   "Export session transcript",
-	"ext":      "List loaded extensions",
+	"ext":      "List loaded plugins (alias)",
 	"fork":     "Fork current session",
 	"help":     "Show commands & shortcuts",
 	"mcp":      "Inspect MCP servers",
 	"model":    "Switch model & reasoning",
+	"mouse":    "Toggle TUI mouse capture (native select)",
 	"name":     "Rename current session",
 	"plan":     "Toggle read-only plan mode",
+	"plugins":  "List loaded plugins",
 	"queue":    "Inspect or clear queued prompts",
 	"quit":     "Exit tern",
 	"rewind":   "Rewind edits to an earlier turn",
@@ -75,7 +84,8 @@ var builtinCommandDescriptions = map[string]string{
 	"stats":    "Usage & cache dashboard",
 	"steer":    "Steer active turn mid-flight",
 	"theme":    "Switch color theme",
-	"thinking": "Set reasoning effort",
+	"thinking": "Set reasoning effort or visibility",
+	"tools":    "Toggle tool display (compact/expanded/hidden)",
 	"undo":     "Undo latest edit turn",
 	"version":  "Show version & update status",
 	"yolo":     "Toggle allow-all permission mode",
@@ -119,6 +129,34 @@ func (m *Model) handleSlash(line string, attachments []provider.ContentPart) tea
 
 	case "version":
 		return m.cmdVersion()
+
+	case "changelog", "whatsnew":
+		m.openChangelogModal()
+		return nil
+
+	case "copy":
+		for i := len(m.entries) - 1; i >= 0; i-- {
+			if m.entries[i].kind == entryAssistant && strings.TrimSpace(m.entries[i].text) != "" {
+				m.copyText(m.entries[i].text)
+				return nil
+			}
+		}
+		m.addInfo("No assistant message to copy yet.")
+		return nil
+
+	case "tools":
+		return m.cmdTools(args)
+
+	case "mouse":
+		m.mouseDisabled = !m.mouseDisabled
+		if m.mouseDisabled {
+			m.statusMsg = "Mouse capture off — native terminal selection active (/mouse to re-enable)"
+			m.dirty = true
+			return tea.DisableMouse
+		}
+		m.statusMsg = "Mouse capture on — drag to select & copy"
+		m.dirty = true
+		return tea.EnableMouseCellMotion
 
 	case "compact":
 		return m.cmdCompact(args)
@@ -183,7 +221,7 @@ func (m *Model) handleSlash(line string, attachments []provider.ContentPart) tea
 		m.openMCPModal()
 		return nil
 
-	case "ext":
+	case "plugin", "plugins", "ext":
 		m.openExtModal()
 		return nil
 
@@ -658,6 +696,44 @@ func (m *Model) cmdName(args string) tea.Cmd {
 		return nil
 	}
 	m.addError("No active session to rename.")
+	return nil
+}
+
+func (m *Model) cmdTools(args string) tea.Cmd {
+	arg := strings.ToLower(strings.TrimSpace(args))
+	switch arg {
+	case "":
+		switch m.tools {
+		case toolsCompact:
+			m.tools = toolsHidden
+			m.showToolDetail = false
+			m.statusMsg = "Tools hidden · /tools to show"
+		case toolsHidden:
+			m.tools = toolsExpanded
+			m.showToolDetail = true
+			m.statusMsg = "Tools expanded"
+		default:
+			m.tools = toolsCompact
+			m.showToolDetail = false
+			m.statusMsg = "Tools compact"
+		}
+	case "hide", "hidden", "off":
+		m.tools = toolsHidden
+		m.showToolDetail = false
+		m.statusMsg = "Tools hidden · /tools to show"
+	case "expand", "expanded", "full":
+		m.tools = toolsExpanded
+		m.showToolDetail = true
+		m.statusMsg = "Tools expanded"
+	case "compact", "show", "on":
+		m.tools = toolsCompact
+		m.showToolDetail = false
+		m.statusMsg = "Tools compact"
+	default:
+		m.addError("Usage: /tools [compact|expanded|hidden]")
+		return nil
+	}
+	m.dirty = true
 	return nil
 }
 

@@ -137,12 +137,13 @@ func (m *Model) handleTranscriptMouse(msg tea.MouseMsg) bool {
 		return false
 	}
 	docLine := msg.Y + m.viewport.YOffset
+	localCol := msg.X - m.viewportX
 	entry := m.entryAtLine(docLine)
-	if entry == nil {
-		return false
-	}
 	switch msg.Button {
 	case tea.MouseButtonRight:
+		if entry == nil {
+			return false
+		}
 		text := entryCopyText(entry)
 		if strings.TrimSpace(text) == "" {
 			return false
@@ -150,20 +151,160 @@ func (m *Model) handleTranscriptMouse(msg tea.MouseMsg) bool {
 		m.copyText(text)
 		return true
 	case tea.MouseButtonLeft:
+		// Always arm drag-to-select on left press inside the transcript so
+		// dragging across any text highlights and copies it on release.
+		m.selDragging = true
+		m.selActive = false
+		m.selPressX = msg.X
+		m.selPressY = msg.Y
+		m.selStartLine = docLine
+		m.selStartCol = localCol
+		m.selEndLine = docLine
+		m.selEndCol = localCol
+		m.selToggledReasoning = false
+
+		if entry == nil {
+			return true
+		}
 		if entry.kind == entryReasoning {
+			m.selToggledReasoning = true
+			m.selPrevThinking = m.thinking
 			if m.thinking == thinkingExpanded {
 				m.thinking = thinkingCollapsed
 				m.statusMsg = "Thinking collapsed"
 			} else {
 				m.thinking = thinkingExpanded
-				m.showToolDetail = true
 				m.statusMsg = "Thinking expanded"
 			}
 			m.dirty = true
 			return true
 		}
+		if entry.kind == entryTool {
+			entry.expanded = !entry.expanded
+			m.dirty = true
+			return true
+		}
+		return true
 	}
 	return false
+}
+
+func (m *Model) clearSelection() {
+	wasActive := m.selActive
+	m.selDragging = false
+	m.selActive = false
+	m.selToggledReasoning = false
+	if wasActive {
+		m.dirty = true
+	}
+}
+
+func (m *Model) updateTranscriptSelection(msg tea.MouseMsg) {
+	if !m.selDragging {
+		return
+	}
+	if !m.selActive && msg.X == m.selPressX && msg.Y == m.selPressY {
+		return
+	}
+	if !m.selActive {
+		m.selActive = true
+		// If the initial press landed on a reasoning row and turned into a
+		// drag, undo the press toggle so dragging never jumps the layout.
+		if m.selToggledReasoning {
+			m.thinking = m.selPrevThinking
+			m.selToggledReasoning = false
+		}
+	}
+	y := clampInt(msg.Y, 0, maxInt(0, m.viewport.Height-1))
+	x := clampInt(msg.X-m.viewportX, 0, maxInt(0, m.viewport.Width))
+	m.selEndLine = y + m.viewport.YOffset
+	m.selEndCol = x
+	m.dirty = true
+}
+
+func (m *Model) finishTranscriptSelection(msg tea.MouseMsg) {
+	if !m.selDragging {
+		return
+	}
+	if m.selActive {
+		m.updateTranscriptSelection(msg)
+	}
+	m.selDragging = false
+	if !m.selActive {
+		return
+	}
+	selected := m.extractSelectedText()
+	if strings.TrimSpace(selected) != "" {
+		m.copyText(selected)
+	}
+}
+
+func (m *Model) normalizedSelection() (sLine, sCol, eLine, eCol int) {
+	sLine, sCol = m.selStartLine, m.selStartCol
+	eLine, eCol = m.selEndLine, m.selEndCol
+	if sLine > eLine || (sLine == eLine && sCol > eCol) {
+		sLine, eLine = eLine, sLine
+		sCol, eCol = eCol, sCol
+	}
+	return sLine, sCol, eLine, eCol
+}
+
+func (m *Model) extractSelectedText() string {
+	if !m.selActive || m.content == "" {
+		return ""
+	}
+	lines := strings.Split(m.content, "\n")
+	sLine, sCol, eLine, eCol := m.normalizedSelection()
+	if sLine < 0 {
+		sLine = 0
+	}
+	if eLine >= len(lines) {
+		eLine = len(lines) - 1
+	}
+	if sLine > eLine {
+		return ""
+	}
+	var out []string
+	for i := sLine; i <= eLine; i++ {
+		plain := []rune(stripANSI(lines[i]))
+		start := 0
+		end := len(plain)
+		if i == sLine {
+			start = clampInt(sCol, 0, len(plain))
+		}
+		if i == eLine {
+			end = clampInt(eCol+1, 0, len(plain))
+		}
+		if start > end {
+			start = end
+		}
+		out = append(out, strings.TrimRight(string(plain[start:end]), " "))
+	}
+	return strings.Join(out, "\n")
+}
+
+func (m *Model) applySelectionHighlight(rendered string) string {
+	if !m.selActive || m.st.plain || rendered == "" {
+		return rendered
+	}
+	lines := strings.Split(rendered, "\n")
+	sLine, sCol, eLine, eCol := m.normalizedSelection()
+	for i := maxInt(0, sLine); i <= minInt(len(lines)-1, eLine); i++ {
+		plain := []rune(stripANSI(lines[i]))
+		start := 0
+		end := len(plain)
+		if i == sLine {
+			start = clampInt(sCol, 0, len(plain))
+		}
+		if i == eLine {
+			end = clampInt(eCol+1, 0, len(plain))
+		}
+		if start >= end {
+			continue
+		}
+		lines[i] = string(plain[:start]) + "\x1b[7m" + string(plain[start:end]) + "\x1b[27m" + string(plain[end:])
+	}
+	return strings.Join(lines, "\n")
 }
 
 // handleStatusMouse resolves clicks on the bottom status bar.

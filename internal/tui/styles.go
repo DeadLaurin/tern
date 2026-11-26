@@ -5,6 +5,8 @@ import (
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
+
+	"github.com/tern-agent/tern/internal/theme"
 )
 
 // noColor reports whether styled output should be disabled. It honours both
@@ -160,12 +162,30 @@ func newStyles(plain bool) styles {
 // newStylesForTheme builds the style bundle for "dark" or "light". Both
 // palettes only ever set foreground colors, so the terminal background shows
 // through evenly and neither theme produces patchy filled rectangles.
-func newStylesForTheme(plain bool, theme string) styles {
+func newStylesForTheme(plain bool, themeName string) styles {
+	return newStylesWithCustom(plain, themeName, nil)
+}
+
+// newStylesWithCustom applies any valid CSS color tokens from a local theme.css
+// on top of the base dark/light palette.
+func newStylesWithCustom(plain bool, themeName string, custom *theme.LoadedTheme) styles {
 	s := styles{plain: plain}
 	if plain {
 		return s
 	}
-	p := paletteForTheme(theme)
+	p := paletteForTheme(themeName)
+	if custom != nil && custom.HasCustom() {
+		p.accent = custom.Color("--accent", p.accent)
+		p.teal = custom.Color("--blue", p.teal)
+		p.sage = custom.Color("--sage", p.sage)
+		p.amber = custom.Color("--amber", p.amber)
+		p.coral = custom.Color("--red", p.coral)
+		p.slate = custom.Color("--reasoning", p.slate)
+		p.text = custom.Color("--text", p.text)
+		p.muted = custom.Color("--muted", p.muted)
+		p.subtle = custom.Color("--dim", p.subtle)
+		p.border = custom.Color("--border", p.border)
+	}
 	color := func(hex string) lipgloss.Color { return lipgloss.Color(hex) }
 
 	s.user = lipgloss.NewStyle().Foreground(color(p.text))

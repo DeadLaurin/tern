@@ -25,6 +25,7 @@ import (
 	"github.com/tern-agent/tern/internal/provider"
 	"github.com/tern-agent/tern/internal/session"
 	"github.com/tern-agent/tern/internal/subagent"
+	"github.com/tern-agent/tern/internal/theme"
 	"github.com/tern-agent/tern/internal/tools"
 )
 
@@ -53,6 +54,7 @@ type Options struct {
 	GlobalConfigDir string
 	GitBranch       string
 	Version     string
+	Changelog   string
 	CheckUpdate func(ctx context.Context) (latest string, available bool, err error)
 	NoColor     bool
 }
@@ -122,6 +124,13 @@ func New(opts Options) *Model {
 	if rawConfigDir != "" {
 		m.historyPath = filepath.Join(rawConfigDir, "history.jsonl")
 		m.loadHistory()
+		m.maybeShowUpgradeChangelog(rawConfigDir)
+	}
+	if loadedTheme, err := theme.Load(opts.WorkDir, rawConfigDir); err == nil && loadedTheme != nil && loadedTheme.HasCustom() {
+		m.st = newStylesWithCustom(noColor(opts.NoColor), "dark", loadedTheme)
+		for _, w := range loadedTheme.Warnings {
+			m.addInfo("⚠ " + w)
+		}
 	}
 	m.viewport.MouseWheelEnabled = true
 	m.viewport.MouseWheelDelta = 3

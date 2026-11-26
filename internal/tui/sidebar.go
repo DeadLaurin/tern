@@ -183,13 +183,13 @@ func (m *Model) sidebarContext(width int) string {
 	if m.ctxWindow > 0 && m.ctxTokens > 0 {
 		ctxSuffix = fmt.Sprintf("%s/%s", compactTokens(m.ctxTokens), compactTokens(m.ctxWindow))
 	}
-	lines = append(lines, m.sidebarGauge("Ctx", ctxPct, barWidth, ctxSuffix))
+	lines = append(lines, m.sidebarGauge("Ctx", ctxPct, barWidth, ctxSuffix, false))
 
 	cachePct := 0
 	if m.cache > 0 {
 		cachePct = clampInt(int(m.cache*100+0.5), 0, 100)
 	}
-	lines = append(lines, m.sidebarGauge("Cache", cachePct, barWidth, ""))
+	lines = append(lines, m.sidebarGauge("Cache", cachePct, barWidth, "", true))
 
 	stats := make([]string, 0, 3)
 	if speed := m.speed(); speed > 0 {
@@ -207,15 +207,21 @@ func (m *Model) sidebarContext(width int) string {
 	return strings.Join(lines, "\n")
 }
 
-func (m *Model) sidebarGauge(label string, pct, barWidth int, suffix string) string {
+func (m *Model) sidebarGauge(label string, pct, barWidth int, suffix string, sage bool) string {
 	pct = clampInt(pct, 0, 100)
 	filled := (pct*barWidth + 50) / 100
 	var bar string
 	if m.st.plain {
 		bar = strings.Repeat("#", filled) + strings.Repeat("-", barWidth-filled)
 	} else {
-		bar = m.st.paint(m.st.accent, strings.Repeat("█", filled)) +
-			m.st.paint(m.st.border, strings.Repeat("░", barWidth-filled))
+		fillStyle := m.st.statusValue
+		if sage {
+			fillStyle = m.st.sage
+		} else if pct >= 80 {
+			fillStyle = m.st.amber
+		}
+		bar = m.st.paint(fillStyle, strings.Repeat("━", filled)) +
+			m.st.paint(m.st.border, strings.Repeat("─", barWidth-filled))
 	}
 	line := fmt.Sprintf("%-5s %s %3d%%", label, bar, pct)
 	if suffix != "" {

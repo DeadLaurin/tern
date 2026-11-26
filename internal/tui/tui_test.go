@@ -448,7 +448,7 @@ func TestReasoningAndToolToggle(t *testing.T) {
 	}})
 	m.Update(tickMsg(time.Now()))
 	view := m.View()
-	if !strings.Contains(view, "^T expand") {
+	if !strings.Contains(view, "Thought") || !strings.Contains(view, "17 chars") {
 		t.Fatalf("collapsed reasoning not shown:\n%s", view)
 	}
 	if !strings.Contains(view, "go test ./...") {
@@ -911,9 +911,9 @@ func TestExtPanelEmptyAndInstalled(t *testing.T) {
 			t.Fatal("/ext did not open the extensions panel")
 		}
 		view := m.View()
-		for _, want := range []string{"~/.config/tern/extensions/", "./.tern/extensions/", "tern ext install <path-or-git-url>"} {
+		for _, want := range []string{"~/.config/tern/plugins/", "./.tern/plugins/", "tern plugin new <name>", "tern plugin install <path-or-git-url>"} {
 			if !strings.Contains(view, want) {
-				t.Fatalf("empty extensions view missing %q:\n%s", want, view)
+				t.Fatalf("empty plugins view missing %q:\n%s", want, view)
 			}
 		}
 		press(t, m, tea.KeyEsc)
@@ -1477,7 +1477,7 @@ func TestThinkingThreeStateCycle(t *testing.T) {
 		t.Fatalf("initial thinking mode = %v, want collapsed", m.thinking)
 	}
 	view := m.View()
-	if !strings.Contains(view, "Thought") || !strings.Contains(view, "^T expand") {
+	if !strings.Contains(view, "Thought") || !strings.Contains(view, "16 chars") {
 		t.Fatalf("collapsed summary missing:\n%s", view)
 	}
 	if strings.Contains(view, "secret reasoning") {
@@ -2589,5 +2589,114 @@ func TestVersionIndicatorAndUpdateBadge(t *testing.T) {
 	view = m.View()
 	if !strings.Contains(view, "tern v0.3.1") || !strings.Contains(view, "update available: v0.3.2") {
 		t.Fatalf("/version output missing version/update info:\n%s", view)
+	}
+}
+
+func TestChangelogModalPopupAndUpgradeAutoShow(t *testing.T) {
+	m := newTestModel(t, Options{Version: "v0.4.1"})
+	m.width = 120
+	m.height = 40
+
+	submitText(t, m, "/changelog")
+	if m.activeModal != modalChangelog {
+		t.Fatalf("activeModal = %v, want modalChangelog", m.activeModal)
+	}
+	view := m.View()
+	if !strings.Contains(view, "What's New") || !strings.Contains(view, "v0.4.1") {
+		t.Fatalf("changelog modal missing expected heading/version:\n%s", view)
+	}
+	press(t, m, tea.KeyDown)
+	if m.modal.changelogScroll != 1 {
+		t.Fatalf("changelogScroll after Down = %d, want 1", m.modal.changelogScroll)
+	}
+	press(t, m, tea.KeyEsc)
+	if m.activeModal != modalNone {
+		t.Fatalf("activeModal after Esc = %v, want modalNone", m.activeModal)
+	}
+
+	// Auto-opens once when upgrading from an older version recorded in GlobalConfigDir.
+	cfgDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(cfgDir, "last_seen_version"), []byte("v0.4.0\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	upgraded := newTestModel(t, Options{Version: "v0.4.1", GlobalConfigDir: cfgDir})
+	if upgraded.activeModal != modalChangelog {
+		t.Fatalf("expected changelog modal to auto-open on version upgrade, got %v", upgraded.activeModal)
+	}
+	// Second launch on the same version should NOT re-open it.
+	second := newTestModel(t, Options{Version: "v0.4.1", GlobalConfigDir: cfgDir})
+	if second.activeModal != modalNone {
+		t.Fatalf("expected no changelog modal on repeat launch, got %v", second.activeModal)
+	}
+}
+
+func TestMouseDragSelectAndCopyInTranscript(t *testing.T) {
+	m := newTestModel(t, Options{})
+	m.width = 120
+	m.height = 40
+	var copied string
+	m.clipboardFn = func(s string) error {
+		copied = s
+		return nil
+	}
+	m.entries = append(m.entries, &transcriptEntry{
+		kind: entryAssistant,
+		text: "hello drag selection world",
+	})
+	m.dirty = true
+	_ = m.View()
+
+	// Find the rendered line containing "hello drag selection world".
+	lines := strings.Split(m.content, "\n")
+	lineIdx := -1
+	for i, l := range lines {
+		if strings.Contains(stripANSI(l), "hello drag") {
+			lineIdx = i
+			break
+		}
+	}
+	if lineIdx < 0 {
+		t.Fatalf("could not find assistant text in content:\n%s", m.content)
+	}
+	screenY := lineIdx - m.viewport.YOffset
+	// Press at col 0, drag to col 9 ("hello drag"), release.
+	m.Update(tea.MouseMsg{Action: tea.MouseActionPress, Button: tea.MouseButtonLeft, X: m.viewportX + 0, Y: screenY})
+	m.Update(tea.MouseMsg{Action: tea.MouseActionMotion, Button: tea.MouseButtonLeft, X: m.viewportX + 9, Y: screenY})
+	m.Update(tea.MouseMsg{Action: tea.MouseActionRelease, Button: tea.MouseButtonLeft, X: m.viewportX + 9, Y: screenY})
+	if copied != "hello drag" {
+		t.Fatalf("drag-copied = %q, want %q", copied, "hello drag")
+	}
+}
+
+func TestToolsHideableAndSummaryFormatting(t *testing.T) {
+	m := newTestModel(t, Options{WorkDir: "/tmp/myrepo"})
+	m.width = 120
+	m.height = 40
+	m.entries = append(m.entries, &transcriptEntry{
+		kind:     entryTool,
+		toolName: "read",
+		args:     `{"path":"/tmp/myrepo/cmd/main.go","offset":10,"limit":20}`,
+		output:   "package main",
+		finished: true,
+		elapsed:  25 * time.Millisecond,
+	})
+	m.dirty = true
+	view := m.View()
+	if !strings.Contains(view, "cmd/main.go:10-29") {
+		t.Fatalf("compact tool view missing shortened path + range:\n%s", view)
+	}
+
+	// /tools hidden hides tool calls from the transcript.
+	submitText(t, m, "/tools hidden")
+	if m.tools != toolsHidden {
+		t.Fatalf("tools mode = %v, want toolsHidden", m.tools)
+	}
+	if strings.Contains(m.View(), "cmd/main.go:10-29") {
+		t.Fatalf("hidden tool still rendered:\n%s", m.View())
+	}
+
+	// ask_user summary extracts the question text rather than raw JSON.
+	if got := formatToolSummary("ask_user", `{"question":"What would you like to do?"}`, ""); got != "What would you like to do?" {
+		t.Fatalf("ask_user summary = %q", got)
 	}
 }

@@ -12,6 +12,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
+	tern "github.com/tern-agent/tern"
 	"github.com/tern-agent/tern/internal/config"
 	terncontext "github.com/tern-agent/tern/internal/context"
 	"github.com/tern-agent/tern/internal/ext"
@@ -32,6 +33,7 @@ const (
 	modalMCP
 	modalExt
 	modalHelp
+	modalChangelog
 	modalAgentPeek
 )
 
@@ -95,6 +97,8 @@ type modalState struct {
 
 	helpItems []helpItem
 
+	changelogScroll int
+
 	// Agent peek modal state. peekAgentID names the sub-agent whose child
 	// transcript is shown, peekScroll is the first visible body line, and
 	// peekReasoning toggles the muted reasoning rail.
@@ -132,6 +136,8 @@ func (m *Model) handleModalKey(msg tea.KeyMsg) tea.Cmd {
 		return m.handleExtModalKey(msg)
 	case modalHelp:
 		return m.handleHelpModalKey(msg)
+	case modalChangelog:
+		return m.handleChangelogModalKey(msg)
 	case modalAgentPeek:
 		return m.handleAgentPeekKey(msg)
 	}
@@ -1434,13 +1440,14 @@ func (m *Model) extModalView() string {
 	m.modalRows = nil
 	var b strings.Builder
 	if len(m.modal.extensions) == 0 {
-		b.WriteString(m.st.paint(m.st.dim, "No extensions installed."))
+		b.WriteString(m.st.paint(m.st.dim, "No plugins installed."))
 		b.WriteString("\n\n")
-		b.WriteString(m.st.paint(m.st.bold, "Install locations") + "\n")
-		b.WriteString("  " + m.st.paint(m.st.dim, "global  ") + "~/.config/tern/extensions/\n")
-		b.WriteString("  " + m.st.paint(m.st.dim, "project ") + "./.tern/extensions/\n")
-		b.WriteString("\n" + m.st.paint(m.st.bold, "Install") + "\n")
-		b.WriteString("  " + m.st.paint(m.st.teal, "tern ext install <path-or-git-url>"))
+		b.WriteString(m.st.paint(m.st.bold, "Plugin locations") + "\n")
+		b.WriteString("  " + m.st.paint(m.st.dim, "global  ") + "~/.config/tern/plugins/\n")
+		b.WriteString("  " + m.st.paint(m.st.dim, "project ") + "./.tern/plugins/\n")
+		b.WriteString("\n" + m.st.paint(m.st.bold, "Create or install") + "\n")
+		b.WriteString("  " + m.st.paint(m.st.teal, "tern plugin new <name>") + "\n")
+		b.WriteString("  " + m.st.paint(m.st.teal, "tern plugin install <path-or-git-url>"))
 	} else {
 		m.clampExtIndex()
 		limit := maxInt(4, minInt(len(m.modal.extensions), m.modalRowLimit()/2))
@@ -1489,7 +1496,7 @@ func (m *Model) extModalView() string {
 	if m.modal.notice != "" {
 		b.WriteString("\n\n" + m.st.paint(m.st.amber, m.modal.notice))
 	}
-	return m.modalFrame("Extensions", strings.TrimRight(b.String(), "\n"),
+	return m.modalFrame("Plugins", strings.TrimRight(b.String(), "\n"),
 		"↑/↓ select · r refresh · esc close")
 }
 
@@ -1801,6 +1808,192 @@ func (m *Model) helpModalView() string {
 }
 
 // ---------------------------------------------------------------------------
+// Changelog / What's New modal
+// ---------------------------------------------------------------------------
+
+func (m *Model) changelogSource() string {
+	if strings.TrimSpace(m.opts.Changelog) != "" {
+		return m.opts.Changelog
+	}
+	return tern.Changelog
+}
+
+func (m *Model) maybeShowUpgradeChangelog(configDir string) {
+	ver := strings.TrimSpace(m.opts.Version)
+	if ver == "" || ver == "dev" || ver == "test" {
+		return
+	}
+	path := filepath.Join(configDir, "last_seen_version")
+	prevBytes, err := os.ReadFile(path)
+	prev := strings.TrimSpace(string(prevBytes))
+	if err == nil && prev != "" && prev != ver {
+		m.openChangelogModal()
+	}
+	if prev != ver {
+		_ = os.MkdirAll(configDir, 0o755)
+		_ = os.WriteFile(path, []byte(ver+"\n"), 0o600)
+	}
+}
+
+func (m *Model) openChangelogModal() {
+	m.setModal(modalChangelog)
+	m.modal.changelogScroll = 0
+	m.statusMsg = "What's New"
+}
+
+func (m *Model) handleChangelogModalKey(msg tea.KeyMsg) tea.Cmd {
+	switch msg.Type {
+	case tea.KeyEsc, tea.KeyEnter:
+		m.closeModal()
+		return nil
+	case tea.KeyUp:
+		if m.modal.changelogScroll > 0 {
+			m.modal.changelogScroll--
+		}
+		return nil
+	case tea.KeyDown:
+		m.modal.changelogScroll++
+		return nil
+	case tea.KeyPgUp:
+		m.modal.changelogScroll -= 8
+		if m.modal.changelogScroll < 0 {
+			m.modal.changelogScroll = 0
+		}
+		return nil
+	case tea.KeyPgDown:
+		m.modal.changelogScroll += 8
+		return nil
+	case tea.KeyHome:
+		m.modal.changelogScroll = 0
+		return nil
+	case tea.KeyRunes:
+		switch string(msg.Runes) {
+		case "q":
+			m.closeModal()
+		case "k":
+			if m.modal.changelogScroll > 0 {
+				m.modal.changelogScroll--
+			}
+		case "j":
+			m.modal.changelogScroll++
+		case "g":
+			m.modal.changelogScroll = 0
+		}
+	}
+	return nil
+}
+
+func (m *Model) changelogModalView() string {
+	width := maxInt(36, m.modalTextWidth()-4)
+	lines := m.renderChangelogLines(width)
+	if len(lines) == 0 {
+		lines = []string{m.st.paint(m.st.dim, "No changelog entries available.")}
+	}
+	visible := m.height - 12
+	if visible < 6 {
+		visible = 6
+	}
+	if visible > 24 {
+		visible = 24
+	}
+	maxScroll := len(lines) - visible
+	if maxScroll < 0 {
+		maxScroll = 0
+	}
+	if m.modal.changelogScroll > maxScroll {
+		m.modal.changelogScroll = maxScroll
+	}
+	if m.modal.changelogScroll < 0 {
+		m.modal.changelogScroll = 0
+	}
+	start := m.modal.changelogScroll
+	end := start + visible
+	if end > len(lines) {
+		end = len(lines)
+	}
+
+	title := "What's New"
+	if ver := m.versionLabel(); ver != "" {
+		title += " · tern " + ver
+	}
+	footer := "↑↓ scroll  ·  PgUp/PgDn page  ·  Enter / Esc close"
+	if maxScroll > 0 {
+		footer = fmt.Sprintf("Lines %d–%d of %d  ·  %s", start+1, end, len(lines), footer)
+	}
+	return m.modalFrame(title, strings.Join(lines[start:end], "\n"), footer)
+}
+
+func (m *Model) renderChangelogLines(width int) []string {
+	src := strings.ReplaceAll(m.changelogSource(), "\r\n", "\n")
+	rawLines := strings.Split(src, "\n")
+	out := make([]string, 0, len(rawLines))
+	seenVersion := false
+	for _, raw := range rawLines {
+		trimmed := strings.TrimSpace(raw)
+		if trimmed == "" {
+			continue
+		}
+		// Skip top-level "# Changelog" heading, intro prose before first version,
+		// and bottom markdown reference links ([v0.4.1]: https://...).
+		if strings.HasPrefix(trimmed, "# ") {
+			continue
+		}
+		if strings.HasPrefix(trimmed, "[") && strings.Contains(trimmed, "]: http") {
+			continue
+		}
+		if strings.HasPrefix(trimmed, "## ") {
+			if seenVersion {
+				out = append(out, "")
+			}
+			seenVersion = true
+			heading := strings.TrimPrefix(trimmed, "## ")
+			heading = strings.ReplaceAll(heading, "[", "")
+			heading = strings.ReplaceAll(heading, "]", "")
+			out = append(out, m.st.paint(m.st.accent, heading))
+			continue
+		}
+		if !seenVersion {
+			continue
+		}
+		if strings.HasPrefix(trimmed, "### ") {
+			sec := strings.TrimPrefix(trimmed, "### ")
+			style := m.st.info
+			switch strings.ToLower(sec) {
+			case "added":
+				style = m.st.success
+			case "fixed":
+				style = m.st.warn
+			case "removed":
+				style = m.st.error
+			}
+			out = append(out, "", "  "+m.st.paint(style, sec))
+			continue
+		}
+		if strings.HasPrefix(trimmed, "- ") || strings.HasPrefix(trimmed, "* ") {
+			item := strings.TrimSpace(trimmed[2:])
+			bullet := "• "
+			if m.st.plain {
+				bullet = "- "
+			}
+			wrapped := strings.Split(wrapPlainCell(item, maxInt(20, width-6)), "\n")
+			for i, wline := range wrapped {
+				if i == 0 {
+					out = append(out, "    "+m.st.paint(m.st.dim, bullet)+wline)
+				} else {
+					out = append(out, "      "+wline)
+				}
+			}
+			continue
+		}
+		wrapped := strings.Split(wrapPlainCell(trimmed, maxInt(20, width-4)), "\n")
+		for _, wline := range wrapped {
+			out = append(out, "  "+m.st.paint(m.st.dim, wline))
+		}
+	}
+	return out
+}
+
+// ---------------------------------------------------------------------------
 // Modal frame and helpers
 // ---------------------------------------------------------------------------
 
@@ -1820,6 +2013,8 @@ func (m *Model) modalView() string {
 		return m.extModalView()
 	case modalHelp:
 		return m.helpModalView()
+	case modalChangelog:
+		return m.changelogModalView()
 	case modalAgentPeek:
 		return m.agentPeekView()
 	}
