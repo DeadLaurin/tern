@@ -126,14 +126,11 @@ func New(opts Options) *Model {
 	m.viewport.MouseWheelDelta = 3
 
 	if opts.WorkDir != "" {
-		// Commands are loaded eagerly so completion works offline.
+		// Commands are loaded eagerly so completion works offline. The repo
+		// index runs asynchronously in Model.Init so startup stays instant even
+		// in large repositories.
 		if cmds, err := terncontext.LoadCommands(opts.WorkDir, opts.GlobalConfigDir); err == nil {
 			m.commands = cmds
-		}
-		// A cheap repository index keeps the welcome view informative without
-		// delaying startup; failures simply leave the line out.
-		if index, err := terncontext.IndexRepo(opts.WorkDir, 80); err == nil && index != nil {
-			m.repoSummary = index.Summary()
 		}
 	}
 

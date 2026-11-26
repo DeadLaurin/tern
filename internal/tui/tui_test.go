@@ -958,6 +958,22 @@ func TestWelcomeShowsRepoSummary(t *testing.T) {
 		}
 	}
 	m := newTestModel(t, Options{WorkDir: dir})
+	// Indexing runs asynchronously via Init so New never blocks startup.
+	if m.repoSummary != "" {
+		t.Fatalf("expected repo summary to load asynchronously, got %q", m.repoSummary)
+	}
+	if cmd := m.Init(); cmd != nil {
+		if batch, ok := cmd().(tea.BatchMsg); ok {
+			for _, sub := range batch {
+				if sub == nil {
+					continue
+				}
+				if msg, ok := sub().(repoSummaryMsg); ok {
+					m.Update(msg)
+				}
+			}
+		}
+	}
 	if !strings.Contains(m.repoSummary, "indexed") {
 		t.Fatalf("repo summary not computed: %q", m.repoSummary)
 	}

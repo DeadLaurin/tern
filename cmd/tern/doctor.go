@@ -1,7 +1,6 @@
 package main
 
 import (
-	"context"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -9,10 +8,10 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"text/tabwriter"
-	"time"
 
 	"github.com/tern-agent/tern/internal/config"
 	terncontext "github.com/tern-agent/tern/internal/context"
@@ -240,13 +239,45 @@ func apiKeyStatus(cfg *config.Config) string {
 // gitBranch returns the current branch of the repository containing workDir,
 // or an empty string when workDir is not inside a git repository.
 func gitBranch(workDir string) string {
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
-	out, err := exec.CommandContext(ctx, "git", "-C", workDir, "rev-parse", "--abbrev-ref", "HEAD").Output()
-	if err != nil {
-		return ""
+	// Fast path: read .git/HEAD directly without spawning a git subprocess.
+	dir := workDir
+	for {
+		dotGit := filepath.Join(dir, ".git")
+		info, err := os.Stat(dotGit)
+		if err == nil {
+			gitDir := dotGit
+			if !info.IsDir() {
+				if raw, err := os.ReadFile(dotGit); err == nil {
+					line := strings.TrimSpace(string(raw))
+					if strings.HasPrefix(line, "gitdir:") {
+						target := strings.TrimSpace(strings.TrimPrefix(line, "gitdir:"))
+						if !filepath.IsAbs(target) {
+							target = filepath.Join(dir, target)
+						}
+						gitDir = target
+					}
+				}
+			}
+			if head, err := os.ReadFile(filepath.Join(gitDir, "HEAD")); err == nil {
+				line := strings.TrimSpace(string(head))
+				const refPrefix = "ref: refs/heads/"
+				if strings.HasPrefix(line, refPrefix) {
+					return strings.TrimPrefix(line, refPrefix)
+				}
+				if len(line) >= 7 {
+					return line[:7]
+				}
+				return line
+			}
+			break
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			break
+		}
+		dir = parent
 	}
-	return strings.TrimSpace(string(out))
+	return ""
 }
 
 // detectDoctorShell resolves the shell used by the bash tool and reports where

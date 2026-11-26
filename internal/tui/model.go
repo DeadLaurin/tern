@@ -247,15 +247,37 @@ type Model struct {
 	agentsPanelAbsRows map[int]int
 }
 
-// Init starts the UI ticker.
+type repoSummaryMsg struct {
+	summary string
+}
+
+// Init starts the UI ticker and kicks off the non-blocking repository index so
+// frame 1 renders immediately on any repository size.
 func (m *Model) Init() tea.Cmd {
-	return tea.Tick(tickInterval, func(t time.Time) tea.Msg { return tickMsg(t) })
+	tick := tea.Tick(tickInterval, func(t time.Time) tea.Msg { return tickMsg(t) })
+	workDir := m.opts.WorkDir
+	if workDir == "" {
+		return tick
+	}
+	return tea.Batch(tick, func() tea.Msg {
+		if index, err := terncontext.IndexRepo(workDir, 80); err == nil && index != nil {
+			return repoSummaryMsg{summary: index.Summary()}
+		}
+		return nil
+	})
 }
 
 // Update handles one message. It never performs blocking agent work on the
 // event loop.
 func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
+	case repoSummaryMsg:
+		if msg.summary != "" {
+			m.repoSummary = msg.summary
+			m.dirty = true
+		}
+		return m, nil
+
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
