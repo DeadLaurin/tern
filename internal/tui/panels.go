@@ -35,6 +35,7 @@ const (
 	modalHelp
 	modalChangelog
 	modalAgentPeek
+	modalProvider
 )
 
 var reasoningEfforts = []string{"none", "low", "high", "max"}
@@ -105,6 +106,8 @@ type modalState struct {
 	peekAgentID   string
 	peekScroll    int
 	peekReasoning bool
+
+	providerSetup providerSetupState
 }
 
 func (m *Model) setModal(kind modalKind) {
@@ -140,6 +143,8 @@ func (m *Model) handleModalKey(msg tea.KeyMsg) tea.Cmd {
 		return m.handleChangelogModalKey(msg)
 	case modalAgentPeek:
 		return m.handleAgentPeekKey(msg)
+	case modalProvider:
+		return m.handleProviderModalKey(msg)
 	}
 	return nil
 }
@@ -1819,17 +1824,23 @@ func (m *Model) changelogSource() string {
 }
 
 func (m *Model) maybeShowUpgradeChangelog(configDir string) {
-	ver := strings.TrimSpace(m.opts.Version)
-	if ver == "" || ver == "dev" || ver == "test" {
-		return
+	pendingPath := filepath.Join(configDir, "pending_changelog")
+	pending := false
+	if _, err := os.Stat(pendingPath); err == nil {
+		pending = true
+		_ = os.Remove(pendingPath)
 	}
+
+	ver := strings.TrimSpace(m.opts.Version)
+	isRealVer := ver != "" && ver != "dev" && ver != "test"
 	path := filepath.Join(configDir, "last_seen_version")
 	prevBytes, err := os.ReadFile(path)
 	prev := strings.TrimSpace(string(prevBytes))
-	if err == nil && prev != "" && prev != ver {
+
+	if pending || (isRealVer && err == nil && prev != "" && prev != ver) {
 		m.openChangelogModal()
 	}
-	if prev != ver {
+	if isRealVer && prev != ver {
 		_ = os.MkdirAll(configDir, 0o755)
 		_ = os.WriteFile(path, []byte(ver+"\n"), 0o600)
 	}
@@ -2017,6 +2028,8 @@ func (m *Model) modalView() string {
 		return m.changelogModalView()
 	case modalAgentPeek:
 		return m.agentPeekView()
+	case modalProvider:
+		return m.providerModalView()
 	}
 	return ""
 }

@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"sort"
+	"strings"
 )
 
 // MarshalCanonicalRequest serializes a request into a byte-for-byte stable
@@ -48,6 +49,54 @@ func MarshalCanonicalRequest(req ChatRequest) ([]byte, error) {
 		StreamOptions:   streamOptions{IncludeUsage: true},
 		ReasoningEffort: req.ReasoningEffort,
 		Thinking:        thinking{Type: thinkingType(req.ReasoningEffort)},
+	}
+	if payload.Messages == nil {
+		payload.Messages = []Message{}
+	}
+
+	return json.Marshal(payload)
+}
+
+// MarshalRequestForProvider serializes a request for the named provider.
+//
+// DeepSeek (and the empty provider name, which defaults to DeepSeek) uses the
+// canonical representation including DeepSeek's proprietary thinking field.
+// Every other provider is treated as a generic OpenAI-compatible endpoint:
+// tools are canonicalized and sorted exactly as in MarshalCanonicalRequest so
+// prefix caching stays stable, but the DeepSeek-only thinking field is
+// omitted and reasoning_effort is dropped when unset or "none" (many
+// OpenAI-compatible providers reject "none").
+func MarshalRequestForProvider(req ChatRequest, providerName string) ([]byte, error) {
+	if providerName == "" || strings.EqualFold(providerName, "deepseek") {
+		return MarshalCanonicalRequest(req)
+	}
+
+	tools, err := canonicalTools(req.Tools)
+	if err != nil {
+		return nil, err
+	}
+
+	reasoningEffort := req.ReasoningEffort
+	if reasoningEffort == "" || strings.EqualFold(reasoningEffort, "none") {
+		reasoningEffort = ""
+	}
+
+	payload := struct {
+		Model           string        `json:"model"`
+		Messages        []Message     `json:"messages"`
+		Tools           []ToolDef     `json:"tools,omitempty"`
+		MaxTokens       int           `json:"max_tokens,omitempty"`
+		Stream          bool          `json:"stream"`
+		StreamOptions   streamOptions `json:"stream_options"`
+		ReasoningEffort string        `json:"reasoning_effort,omitempty"`
+	}{
+		Model:           req.Model,
+		Messages:        req.Messages,
+		Tools:           tools,
+		MaxTokens:       req.MaxTokens,
+		Stream:          true,
+		StreamOptions:   streamOptions{IncludeUsage: true},
+		ReasoningEffort: reasoningEffort,
 	}
 	if payload.Messages == nil {
 		payload.Messages = []Message{}

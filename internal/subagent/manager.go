@@ -156,6 +156,22 @@ func NewManager(cfg Config) *Manager {
 	return m
 }
 
+// SetProvider updates the provider and optional default model used by newly
+// spawned sub-agents.
+func (m *Manager) SetProvider(p provider.Provider, model string) {
+	if m == nil {
+		return
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if p != nil {
+		m.cfg.Provider = p
+	}
+	if strings.TrimSpace(model) != "" {
+		m.cfg.Model = strings.TrimSpace(model)
+	}
+}
+
 // Config returns the effective configuration.
 func (m *Manager) Config() Config {
 	m.mu.Lock()

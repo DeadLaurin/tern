@@ -4,6 +4,18 @@ All notable changes to tern are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and tern adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v0.6.0] - 2026-11-26
+
+### Added
+- **Multi-provider support**: built-in presets for `deepseek`, `openrouter`, `openai`, `groq`, `xai`, `mistral`, `together`, `ollama`, and `lmstudio`, plus any custom OpenAI-compatible `--base-url` endpoint (`--provider <name>`, `TERN_PROVIDER`, or `provider = "..."` in `config.toml`).
+- **Per-provider credentials**: resolves provider-specific env vars (`OPENROUTER_API_KEY`, `OPENAI_API_KEY`, `GROQ_API_KEY`, `XAI_API_KEY`, `MISTRAL_API_KEY`, `TOGETHER_API_KEY`, `DEEPSEEK_API_KEY`, `TERN_API_KEY`) and stores keys per provider under `[providers]` in `~/.config/tern/credentials.toml` while staying backwards-compatible with legacy `api_key`.
+- **`tern providers [--json]`**: lists all built-in providers, key status, env vars, default models, and endpoints.
+- **First-run TUI onboarding & `/provider` switcher**: launching `tern` with no key configured now opens the TUI immediately with an interactive provider setup modal highlighting DeepSeek as recommended while also offering OpenRouter, other cloud APIs, Ollama, LM Studio, and custom OpenAI-compatible servers.
+- **OpenRouter & OpenAI-compatible streaming**: omits DeepSeek-only `thinking` fields on non-DeepSeek APIs, sends OpenRouter attribution headers, streams `delta.reasoning`, and recognizes Claude, Gemini, GPT-4/5, and o3/o4 model capabilities.
+
+### Fixed
+- `tern update` no longer dumps release notes into the terminal; it records a pending changelog marker so the `What's New` modal opens reliably once on the next TUI launch.
+
 ## [v0.5.1] - 2026-11-26
 
 ### Added
@@ -85,6 +97,7 @@ All notable changes to tern are documented here. The format is based on
 - `tern doctor` section headers render in order.
 - All `IsParallelSafe` tools, including task sub-agents, run concurrently.
 
+[v0.6.0]: https://github.com/DeadLaurin/tern/compare/v0.5.1...v0.6.0
 [v0.5.1]: https://github.com/DeadLaurin/tern/compare/v0.5.0...v0.5.1
 [v0.5.0]: https://github.com/DeadLaurin/tern/compare/v0.4.1...v0.5.0
 [v0.4.1]: https://github.com/DeadLaurin/tern/compare/v0.4.0...v0.4.1

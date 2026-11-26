@@ -12,6 +12,7 @@ import (
 	"golang.org/x/term"
 
 	"github.com/tern-agent/tern/internal/config"
+	"github.com/tern-agent/tern/internal/provider"
 )
 
 // defaultLocalBaseURL is the OpenAI-compatible endpoint exposed by a default
@@ -38,15 +39,20 @@ func isLoopbackBaseURL(rawURL string) bool {
 	return false
 }
 
-// ensureAPIKey loads the DeepSeek API key, prompting exactly once on an
-// interactive terminal when none is configured. Non-interactive sessions get a
-// clear, actionable error instead of hanging on a hidden prompt.
+// ensureAPIKey loads the DeepSeek API key, prompting once on an interactive
+// terminal when none is configured.
 func ensureAPIKey(in io.Reader, out, errOut io.Writer, stdinTTY bool) (string, error) {
+	return ensureAPIKeyForProvider("deepseek", in, out, errOut, stdinTTY)
+}
+
+// ensureAPIKeyForProvider loads the API key for providerName, prompting once
+// on an interactive terminal when none is configured.
+func ensureAPIKeyForProvider(providerName string, in io.Reader, out, errOut io.Writer, stdinTTY bool) (string, error) {
 	configDir, err := config.ConfigDir()
 	if err != nil {
 		return "", err
 	}
-	key, err := config.LoadAPIKey(configDir)
+	key, err := config.LoadAPIKeyForProvider(configDir, providerName)
 	if err != nil {
 		return "", err
 	}
@@ -54,11 +60,18 @@ func ensureAPIKey(in io.Reader, out, errOut io.Writer, stdinTTY bool) (string, e
 		return key, nil
 	}
 
-	if !stdinTTY {
-		return "", errors.New("DEEPSEEK_API_KEY is not set and no stored credentials were found; set DEEPSEEK_API_KEY or run `tern` interactively once to save a key")
+	envName := config.EnvAPIKey
+	if preset, ok := config.LookupProvider(providerName); ok && preset.EnvVar != "" {
+		envName = preset.EnvVar
+	} else if providerName != "" && !strings.EqualFold(providerName, "deepseek") {
+		envName = config.EnvGenericAPIKey
 	}
 
-	fmt.Fprint(out, "Enter DEEPSEEK_API_KEY: ")
+	if !stdinTTY {
+		return "", fmt.Errorf("%s is not set and no stored credentials were found for %q; set %s or run `tern` interactively once to save a key", envName, providerName, envName)
+	}
+
+	fmt.Fprintf(out, "Enter %s: ", envName)
 	key, err = readPassword(in)
 	fmt.Fprintln(out)
 	if err != nil {
@@ -68,13 +81,24 @@ func ensureAPIKey(in io.Reader, out, errOut io.Writer, stdinTTY bool) (string, e
 	if key == "" {
 		return "", errors.New("API key must not be empty")
 	}
-	if err := config.SaveAPIKey(configDir, key); err != nil {
+	if err := config.SaveAPIKeyForProvider(configDir, providerName, key); err != nil {
 		return "", err
 	}
 	if errOut != nil {
-		fmt.Fprintf(errOut, "tern: saved API key to %s\n", configDir)
+		fmt.Fprintf(errOut, "tern: saved %s API key to %s\n", providerName, configDir)
 	}
 	return key, nil
+}
+
+// newProviderClient builds an HTTP streaming client configured for cfg's
+// provider preset (base URL, API key, and provider-specific headers such as
+// OpenRouter attribution headers).
+func newProviderClient(cfg *config.Config) *provider.DeepSeekClient {
+	var extraHeaders map[string]string
+	if preset, ok := config.LookupProvider(cfg.Provider); ok && len(preset.ExtraHeaders) > 0 {
+		extraHeaders = preset.ExtraHeaders
+	}
+	return provider.NewOpenAICompatClient(cfg.Provider, cfg.BaseURL, cfg.APIKey, extraHeaders)
 }
 
 func readPassword(in io.Reader) (string, error) {

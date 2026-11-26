@@ -14,6 +14,8 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+
+	"github.com/tern-agent/tern/internal/config"
 )
 
 func TestLatestReleaseDecodesTagAndBody(t *testing.T) {
@@ -230,15 +232,21 @@ func TestUpdateInstallPrintsReleaseNotes(t *testing.T) {
 		t.Fatalf("update exit %d, stderr: %s", code, o.Err.(*bytes.Buffer).String())
 	}
 	out := o.Out.(*bytes.Buffer).String()
-	updated := strings.Index(out, "Updated tern to v1.2.3.")
-	if updated < 0 {
+	if !strings.Contains(out, "Updated tern to v1.2.3.") {
 		t.Fatalf("update output missing confirmation:\n%s", out)
 	}
-	notes := strings.Index(out, "What's new in v1.2.3:")
-	if notes < updated {
-		t.Fatalf("release notes not printed after update confirmation:\n%s", out)
+	if strings.Contains(out, "What's new in v1.2.3:") || strings.Contains(out, "fresh binary") {
+		t.Fatalf("update should defer changelog to TUI instead of printing it in terminal:\n%s", out)
 	}
-	if !strings.Contains(out, "  - fresh binary") {
-		t.Fatalf("update output missing release notes:\n%s", out)
+	cfgDir, err := config.ConfigDir()
+	if err != nil {
+		t.Fatalf("ConfigDir: %v", err)
+	}
+	marker, err := os.ReadFile(filepath.Join(cfgDir, "pending_changelog"))
+	if err != nil {
+		t.Fatalf("expected pending_changelog marker after update: %v", err)
+	}
+	if strings.TrimSpace(string(marker)) != "v1.2.3" {
+		t.Fatalf("pending_changelog = %q, want v1.2.3", string(marker))
 	}
 }

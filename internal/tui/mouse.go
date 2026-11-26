@@ -441,6 +441,8 @@ func (m *Model) clampActiveModalIndex() {
 		m.clampExtIndex()
 	case modalHelp:
 		m.clampHelpIndex()
+	case modalProvider:
+		m.clampProviderIndex()
 	}
 }
 

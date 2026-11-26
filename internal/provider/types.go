@@ -8,6 +8,7 @@ package provider
 import (
 	"context"
 	"encoding/json"
+	"strings"
 )
 
 // Provider is the minimal interface a model backend must implement.
@@ -48,11 +49,26 @@ func DefaultModelCapabilities(model string) ModelCapabilities {
 		SupportsVision:   false,
 		SupportsThinking: true,
 	}
-	switch model {
-	case "deepseek-flash":
-		caps.SupportsVision = true
-	case "deepseek-v4-pro":
+	lower := strings.ToLower(model)
+	switch {
+	case lower == "deepseek-v4-pro":
 		caps.SupportsVision = false
+	case lower == "deepseek-flash":
+		caps.SupportsVision = true
+	case strings.Contains(lower, "claude-"):
+		// Anthropic Claude models (also seen as openrouter/anthropic/claude-*).
+		caps.ContextWindow = 200_000
+		caps.SupportsVision = true
+	case strings.Contains(lower, "gemini-"):
+		// Google Gemini models support a ~1M token context.
+		caps.ContextWindow = 1_000_000
+		caps.SupportsVision = true
+	case strings.Contains(lower, "gpt-4"),
+		strings.Contains(lower, "gpt-5"),
+		strings.Contains(lower, "o3"),
+		strings.Contains(lower, "o4"):
+		// OpenAI multimodal model families.
+		caps.SupportsVision = true
 	}
 	return caps
 }

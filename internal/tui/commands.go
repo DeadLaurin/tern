@@ -41,6 +41,7 @@ var builtinCommandNames = []string{
 	"name",
 	"plan",
 	"plugins",
+	"provider",
 	"queue",
 	"quit",
 	"rewind",
@@ -76,6 +77,7 @@ var builtinCommandDescriptions = map[string]string{
 	"name":     "Rename current session",
 	"plan":     "Toggle read-only plan mode",
 	"plugins":  "List loaded plugins",
+	"provider": "Configure or switch AI provider",
 	"queue":    "Inspect or clear queued prompts",
 	"quit":     "Exit tern",
 	"rewind":   "Rewind edits to an earlier turn",
@@ -107,6 +109,10 @@ func (m *Model) handleSlash(line string, attachments []provider.ContentPart) tea
 
 	case "model":
 		return m.cmdModel(args)
+
+	case "provider", "providers":
+		m.openProviderModal(false)
+		return nil
 
 	case "effort", "thinking":
 		return m.cmdEffort(args)

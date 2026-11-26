@@ -259,6 +259,7 @@ type Model struct {
 	// modal carries the selected rows, filters and transient prompts.
 	activeModal modalKind
 	modal       modalState
+	needsSetup  bool
 
 	// clipboardFn is the clipboard writer. It defaults to copyToClipboard and
 	// is injectable so tests stay hermetic.
@@ -821,6 +822,11 @@ func (m *Model) submit() tea.Cmd {
 
 	if strings.HasPrefix(text, "/") && !strings.Contains(text, "\n") {
 		return m.handleSlash(text, attachments)
+	}
+	if m.needsSetup {
+		m.ed.SetValue(text)
+		m.openProviderModal(true)
+		return nil
 	}
 	if m.running {
 		m.queueMessage(text, attachments)

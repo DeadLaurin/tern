@@ -19,6 +19,8 @@ import (
 	"runtime"
 	"strings"
 	"time"
+
+	"github.com/tern-agent/tern/internal/config"
 )
 
 const defaultUpdateRepo = "DeadLaurin/tern"
@@ -126,9 +128,21 @@ func runUpdateCommand(args []string, out, errOut io.Writer) int {
 		fmt.Fprintf(out, "tern is already up to date (%s)\n", tag)
 		return 0
 	}
-	fmt.Fprintf(out, "Updated tern to %s.\n", tag)
-	printReleaseNotes(out, tag, release.Body)
+	fmt.Fprintf(out, "Updated tern to %s. Run tern to see what's new.\n", tag)
+	markPendingChangelog(tag)
 	return 0
+}
+
+// markPendingChangelog records that an update just completed so the TUI shows
+// the What's New modal once on its next launch instead of dumping release notes
+// into the terminal during `tern update`.
+func markPendingChangelog(tag string) {
+	configDir, err := config.ConfigDir()
+	if err != nil || strings.TrimSpace(configDir) == "" {
+		return
+	}
+	_ = os.MkdirAll(configDir, 0o755)
+	_ = os.WriteFile(filepath.Join(configDir, "pending_changelog"), []byte(strings.TrimSpace(tag)+"\n"), 0o600)
 }
 
 // releaseNotesMaxLines caps how much of a release body is printed.

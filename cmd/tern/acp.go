@@ -13,7 +13,6 @@ import (
 
 	"github.com/tern-agent/tern/internal/acp"
 	"github.com/tern-agent/tern/internal/config"
-	"github.com/tern-agent/tern/internal/provider"
 )
 
 // runACPCommand serves the Agent Client Protocol (ACP) over stdin/stdout.
@@ -70,7 +69,7 @@ func runACPCommand(args []string, o runOptions) int {
 			if isLoopbackBaseURL(cfg.BaseURL) {
 				cfg.APIKey = "local"
 			} else {
-				key, authErr := ensureAPIKey(o.In, o.Out, o.Err, o.StdinTTY)
+				key, authErr := ensureAPIKeyForProvider(cfg.Provider, o.In, o.Out, o.Err, o.StdinTTY)
 				if authErr != nil {
 					fmt.Fprintf(o.Err, "tern acp: %v\n", authErr)
 					return 1
@@ -78,9 +77,7 @@ func runACPCommand(args []string, o runOptions) int {
 				cfg.APIKey = key
 			}
 		}
-		client := provider.NewDeepSeekClient(cfg.APIKey)
-		client.BaseURL = cfg.BaseURL
-		prov = client
+		prov = newProviderClient(cfg)
 	}
 
 	configDir, err := config.ConfigDir()

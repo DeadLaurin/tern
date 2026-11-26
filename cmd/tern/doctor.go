@@ -227,11 +227,14 @@ func collectDoctorReport(version, workDir string, cfg *config.Config) (*doctorRe
 // apiKeyStatus renders the API key as a status marker. The key itself must
 // never be printed by this command.
 func apiKeyStatus(cfg *config.Config) string {
-	if cfg == nil || strings.TrimSpace(cfg.APIKey) == "" {
+	if cfg == nil {
 		return "[not set]"
 	}
 	if isLoopbackBaseURL(cfg.BaseURL) {
 		return "[local]"
+	}
+	if strings.TrimSpace(cfg.APIKey) == "" {
+		return "[not set]"
 	}
 	return "[set]"
 }

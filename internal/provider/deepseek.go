@@ -23,12 +23,15 @@ var (
 	ErrContextTooLong = errors.New("provider: context too long")
 )
 
-// APIError is a typed error returned by the DeepSeek API.
+// APIError is a typed error returned by an OpenAI-compatible chat API.
 type APIError struct {
 	StatusCode int
 	Message    string
 	Type       string
 	Retryable  bool
+	// Provider is the provider name used in error messages. Empty (or
+	// "deepseek") renders as "deepseek" for backwards compatibility.
+	Provider string
 
 	// ContextTooLong marks requests rejected because the prompt exceeds the
 	// model's context window. Such requests must never be retried.
@@ -43,10 +46,14 @@ func (e *APIError) Error() string {
 	if msg == "" {
 		msg = http.StatusText(e.StatusCode)
 	}
-	if e.Type != "" {
-		return fmt.Sprintf("provider: deepseek API error %d (%s): %s", e.StatusCode, e.Type, msg)
+	providerName := e.Provider
+	if providerName == "" || strings.EqualFold(providerName, "deepseek") {
+		providerName = "deepseek"
 	}
-	return fmt.Sprintf("provider: deepseek API error %d: %s", e.StatusCode, msg)
+	if e.Type != "" {
+		return fmt.Sprintf("provider: %s API error %d (%s): %s", providerName, e.StatusCode, e.Type, msg)
+	}
+	return fmt.Sprintf("provider: %s API error %d: %s", providerName, e.StatusCode, msg)
 }
 
 // Unwrap exposes the sentinel matching the underlying failure class.
@@ -74,6 +81,15 @@ type DeepSeekClient struct {
 	BaseURL    string
 	HTTPClient *http.Client
 
+	// ProviderName selects the request serialization flavor. Empty means
+	// DeepSeek. Other values (openrouter, openai, groq, xai, mistral,
+	// together, ollama, lmstudio, custom, ...) are treated as generic
+	// OpenAI-compatible endpoints.
+	ProviderName string
+	// ExtraHeaders are added to every request (for example OpenRouter's
+	// HTTP-Referer and X-Title).
+	ExtraHeaders map[string]string
+
 	// MaxRetries is the number of retries after the initial attempt. Zero
 	// means the default (4).
 	MaxRetries int
@@ -91,6 +107,24 @@ func NewDeepSeekClient(apiKey string) *DeepSeekClient {
 		BaseURL:     defaultDeepSeekBaseURL,
 		MaxRetries:  4,
 		BaseBackoff: 500 * time.Millisecond,
+	}
+}
+
+// NewOpenAICompatClient returns a client for any OpenAI-compatible chat
+// completions endpoint (OpenRouter, OpenAI, Groq, xAI, Mistral, Together,
+// Ollama, LM Studio, or a custom gateway).
+func NewOpenAICompatClient(providerName, baseURL, apiKey string, extraHeaders map[string]string) *DeepSeekClient {
+	headers := make(map[string]string, len(extraHeaders))
+	for k, v := range extraHeaders {
+		headers[k] = v
+	}
+	return &DeepSeekClient{
+		APIKey:       apiKey,
+		BaseURL:      baseURL,
+		ProviderName: providerName,
+		ExtraHeaders: headers,
+		MaxRetries:   4,
+		BaseBackoff:  500 * time.Millisecond,
 	}
 }
 
@@ -129,7 +163,7 @@ func (c *DeepSeekClient) Stream(ctx context.Context, req ChatRequest) (<-chan St
 	prepared.Messages = PrepareMessagesForRequest(req.Messages)
 	prepared.Stream = true
 
-	body, err := MarshalCanonicalRequest(prepared)
+	body, err := MarshalRequestForProvider(prepared, c.ProviderName)
 	if err != nil {
 		return nil, err
 	}
@@ -173,9 +207,14 @@ func (c *DeepSeekClient) doWithRetry(ctx context.Context, body []byte) (*http.Re
 		if err != nil {
 			return nil, fmt.Errorf("provider: build request: %w", err)
 		}
-		httpReq.Header.Set("Authorization", "Bearer "+c.APIKey)
 		httpReq.Header.Set("Content-Type", "application/json")
 		httpReq.Header.Set("Accept", "text/event-stream")
+		if strings.TrimSpace(c.APIKey) != "" {
+			httpReq.Header.Set("Authorization", "Bearer "+c.APIKey)
+		}
+		for key, value := range c.ExtraHeaders {
+			httpReq.Header.Set(key, value)
+		}
 
 		resp, err := client.Do(httpReq)
 		if err != nil {
@@ -221,6 +260,7 @@ func (c *DeepSeekClient) readAPIError(resp *http.Response) (*APIError, time.Dura
 	apiErr := &APIError{
 		StatusCode: resp.StatusCode,
 		Retryable:  resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode >= 500,
+		Provider:   c.ProviderName,
 	}
 	var payload struct {
 		Error struct {
@@ -419,6 +459,12 @@ func handleSSEChunk(ctx context.Context, out chan<- StreamEvent, chunk sseChunk,
 			if !emitEvent(ctx, out, StreamEvent{Type: EventReasoningDelta, Text: delta.ReasoningContent}) {
 				return finishReason, emitFailure(ctx)
 			}
+		} else if delta.Reasoning != "" {
+			// OpenRouter and OpenAI-compatible reasoning models use
+			// "reasoning" instead of DeepSeek's "reasoning_content".
+			if !emitEvent(ctx, out, StreamEvent{Type: EventReasoningDelta, Text: delta.Reasoning}) {
+				return finishReason, emitFailure(ctx)
+			}
 		}
 		if delta.Content != "" {
 			if !emitEvent(ctx, out, StreamEvent{Type: EventTextDelta, Text: delta.Content}) {
@@ -510,6 +556,7 @@ type sseChunk struct {
 
 type sseDelta struct {
 	ReasoningContent string        `json:"reasoning_content"`
+	Reasoning        string        `json:"reasoning"`
 	Content          string        `json:"content"`
 	ToolCalls        []sseToolCall `json:"tool_calls"`
 }

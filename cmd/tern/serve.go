@@ -16,7 +16,6 @@ import (
 	"time"
 
 	"github.com/tern-agent/tern/internal/config"
-	"github.com/tern-agent/tern/internal/provider"
 	"github.com/tern-agent/tern/internal/serve"
 )
 
@@ -29,12 +28,14 @@ type serveOptions struct {
 	Port       int
 	LAN        bool
 	LocalOnly  bool
-	Password   string
-	Auth       bool
-	NoAuth     bool
-	Model      string
-	ModelSet   bool
-	Local      bool
+	Password    string
+	Auth        bool
+	NoAuth      bool
+	Provider    string
+	ProviderSet bool
+	Model       string
+	ModelSet    bool
+	Local       bool
 	Permission string
 	PermSet    bool
 	Continue   bool
@@ -56,6 +57,7 @@ Flags:
       --password <pw>       optional login password (or set TERN_SERVE_PASSWORD)
       --auth                generate a random login password automatically
       --no-auth             disable login password even if TERN_SERVE_PASSWORD is set
+      --provider <name>     provider preset (deepseek, openrouter, openai, groq, ollama, ...)
       --model <name>        model name
       --local               use Ollama at http://localhost:11434/v1
       --permission <mode>   ask, auto-edit, yolo or plan
@@ -75,6 +77,7 @@ func parseServeArgs(args []string) (*serveOptions, error) {
 	fs.StringVar(&opts.Password, "password", "", "optional login password")
 	fs.BoolVar(&opts.Auth, "auth", false, "generate a random login password")
 	fs.BoolVar(&opts.NoAuth, "no-auth", false, "disable login password")
+	fs.StringVar(&opts.Provider, "provider", "", "provider preset")
 	fs.StringVar(&opts.Model, "model", "", "model name")
 	fs.BoolVar(&opts.Local, "local", false, "use a local OpenAI-compatible server")
 	fs.StringVar(&opts.Permission, "permission", "", "permission mode")
@@ -92,6 +95,7 @@ func parseServeArgs(args []string) (*serveOptions, error) {
 	}
 	visited := make(map[string]bool)
 	fs.Visit(func(f *flag.Flag) { visited[f.Name] = true })
+	opts.ProviderSet = visited["provider"]
 	opts.ModelSet = visited["model"]
 	opts.PermSet = visited["permission"]
 	if opts.LocalOnly {
@@ -156,6 +160,9 @@ func runServeCommand(args []string, o runOptions) int {
 	}
 
 	flags := &config.FlagOverrides{}
+	if opts.ProviderSet {
+		flags.Provider = &opts.Provider
+	}
 	if opts.ModelSet {
 		flags.Model = &opts.Model
 	}
@@ -178,7 +185,7 @@ func runServeCommand(args []string, o runOptions) int {
 		if isLoopbackBaseURL(cfg.BaseURL) {
 			cfg.APIKey = "local"
 		} else {
-			key, authErr := ensureAPIKey(o.In, o.Out, o.Err, o.StdinTTY)
+			key, authErr := ensureAPIKeyForProvider(cfg.Provider, o.In, o.Out, o.Err, o.StdinTTY)
 			if authErr != nil {
 				fmt.Fprintf(o.Err, "tern serve: %v\n", authErr)
 				return 1
@@ -200,9 +207,7 @@ func runServeCommand(args []string, o runOptions) int {
 
 	prov := o.Provider
 	if prov == nil {
-		client := provider.NewDeepSeekClient(cfg.APIKey)
-		client.BaseURL = cfg.BaseURL
-		prov = client
+		prov = newProviderClient(cfg)
 	}
 
 	// Bind first so a busy port fails fast, before sessions and MCP clients

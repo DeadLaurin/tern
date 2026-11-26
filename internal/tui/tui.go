@@ -53,10 +53,12 @@ type Options struct {
 	WorkDir         string
 	GlobalConfigDir string
 	GitBranch       string
-	Version     string
-	Changelog   string
-	CheckUpdate func(ctx context.Context) (latest string, available bool, err error)
-	NoColor     bool
+	Version             string
+	Changelog           string
+	CheckUpdate         func(ctx context.Context) (latest string, available bool, err error)
+	NeedsSetup          bool
+	OnConfigureProvider func(providerName, baseURL, apiKey, model string) error
+	NoColor             bool
 }
 
 // Run starts the interactive program and blocks until it exits.
@@ -124,7 +126,13 @@ func New(opts Options) *Model {
 	if rawConfigDir != "" {
 		m.historyPath = filepath.Join(rawConfigDir, "history.jsonl")
 		m.loadHistory()
-		m.maybeShowUpgradeChangelog(rawConfigDir)
+		if !opts.NeedsSetup {
+			m.maybeShowUpgradeChangelog(rawConfigDir)
+		}
+	}
+	if opts.NeedsSetup {
+		m.needsSetup = true
+		m.openProviderModal(true)
 	}
 	if loadedTheme, err := theme.Load(opts.WorkDir, rawConfigDir); err == nil && loadedTheme != nil && loadedTheme.HasCustom() {
 		m.st = newStylesWithCustom(noColor(opts.NoColor), "dark", loadedTheme)

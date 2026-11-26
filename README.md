@@ -91,6 +91,8 @@ tern --rpc
 | `tern -p "..."` | Run a single non-interactive prompt (supports piped stdin) |
 | `tern --continue` / `--resume <id>` | Continue the latest session or resume a specific one |
 | `tern --json` / `--rpc` | Stream structured JSONL events or run as a JSON-RPC server |
+| `tern --provider <name>` | Use DeepSeek, OpenRouter, OpenAI, Groq, xAI, Mistral, Together, Ollama, or LM Studio |
+| `tern providers` | List built-in providers, env vars, default models, and API key status |
 | `tern --local` | Connect to a local Ollama / OpenAI-compatible endpoint |
 | `tern serve` | Start the minimalist LAN web UI (`0.0.0.0:7433`, `--password`, `--local-only`) |
 | `tern acp` | Serve Agent Client Protocol (ACP) over stdio for ACP hosts with usage stats |

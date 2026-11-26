@@ -30,10 +30,12 @@ type cliOptions struct {
 	Print      bool
 	JSON       bool
 	RPC        bool
-	Continue   bool
-	Resume     string
-	Model      string
-	ModelSet   bool
+	Continue    bool
+	Resume      string
+	Provider    string
+	ProviderSet bool
+	Model       string
+	ModelSet    bool
 	BaseURL    string
 	BaseURLSet bool
 	Local      bool
@@ -99,6 +101,8 @@ func runWithOptions(o runOptions) int {
 			return runStatsCommand(o.Args[1:], o)
 		case "doctor":
 			return runDoctorCommand(o.Args[1:], o)
+		case "providers", "provider":
+			return runProvidersCommand(o.Args[1:], o)
 		case "plugin", "plugins":
 			return runPluginCommand(o.Args[1:], o)
 		case "skill", "skills":
@@ -183,11 +187,18 @@ func runWithOptions(o runOptions) int {
 
 	// First-run authentication. Loopback base URLs (Ollama, LM Studio, vLLM)
 	// are offline endpoints that do not need a hosted-provider API key.
+	// In interactive TUI mode, open the TUI immediately and show the built-in
+	// provider setup modal (DeepSeek recommended, plus OpenRouter, other cloud
+	// providers, and local LLMs) instead of blocking on a raw terminal prompt.
+	interactiveTUI := !promptMode && !opts.RPC && !opts.JSON
+	needsSetup := false
 	if strings.TrimSpace(cfg.APIKey) == "" {
 		if isLoopbackBaseURL(cfg.BaseURL) {
 			cfg.APIKey = "local"
+		} else if interactiveTUI && o.Provider == nil {
+			needsSetup = true
 		} else {
-			key, authErr := ensureAPIKey(o.In, o.Out, o.Err, o.StdinTTY)
+			key, authErr := ensureAPIKeyForProvider(cfg.Provider, o.In, o.Out, o.Err, o.StdinTTY)
 			if authErr != nil {
 				fmt.Fprintf(o.Err, "tern: %v\n", authErr)
 				return 1
@@ -209,8 +220,7 @@ func runWithOptions(o runOptions) int {
 
 	prov := o.Provider
 	if prov == nil {
-		client := provider.NewDeepSeekClient(cfg.APIKey)
-		client.BaseURL = cfg.BaseURL
+		client := newProviderClient(cfg)
 		if cfg.DebugCache {
 			client.DebugCacheLogger = func(msg string) {
 				fmt.Fprintf(o.Err, "[cache] %s\n", msg)
@@ -272,20 +282,58 @@ func runWithOptions(o runOptions) int {
 				return checkUpdateQuick(c, curVer)
 			}
 		}
+		onConfigureProvider := func(providerName, baseURL, apiKey, model string) error {
+			providerName = strings.ToLower(strings.TrimSpace(providerName))
+			baseURL = strings.TrimSpace(baseURL)
+			apiKey = strings.TrimSpace(apiKey)
+			model = strings.TrimSpace(model)
+
+			if apiKey != "" && apiKey != "local" && !isLoopbackBaseURL(baseURL) {
+				if err := config.SaveAPIKeyForProvider(configDir, providerName, apiKey); err != nil {
+					return err
+				}
+			}
+			if err := config.SaveGlobalProviderSelection(configDir, providerName, baseURL, model); err != nil {
+				return err
+			}
+
+			cfg.Provider = providerName
+			if baseURL != "" {
+				cfg.BaseURL = baseURL
+			}
+			if model != "" {
+				cfg.Model = model
+			}
+			cfg.APIKey = apiKey
+
+			client := newProviderClient(cfg)
+			if cfg.DebugCache {
+				client.DebugCacheLogger = func(msg string) {
+					fmt.Fprintf(o.Err, "[cache] %s\n", msg)
+				}
+			}
+			rt.Agent.Provider = client
+			if rt.Subagents != nil {
+				rt.Subagents.SetProvider(client, cfg.Model)
+			}
+			return nil
+		}
 		err := tui.Run(ctx, tui.Options{
-			Config:          cfg,
-			Agent:           rt.Agent,
-			Subagent:        rt.Subagents,
-			SessionStore:    rt.SessionStore,
-			Session:         rt.Session,
-			Checkpoints:     rt.Checkpoints,
-			Extensions:      rt.MCP,
-			Todos:           rt.Todos,
-			WorkDir:         workDir,
-			GlobalConfigDir: configDir,
-			Version:         o.Version,
-			CheckUpdate:     updateChecker,
-			NoColor:         noColor(),
+			Config:              cfg,
+			Agent:               rt.Agent,
+			Subagent:            rt.Subagents,
+			SessionStore:        rt.SessionStore,
+			Session:             rt.Session,
+			Checkpoints:         rt.Checkpoints,
+			Extensions:          rt.MCP,
+			Todos:               rt.Todos,
+			WorkDir:             workDir,
+			GlobalConfigDir:     configDir,
+			Version:             o.Version,
+			CheckUpdate:         updateChecker,
+			NeedsSetup:          needsSetup,
+			OnConfigureProvider: onConfigureProvider,
+			NoColor:             noColor(),
 		})
 		if err != nil && !errors.Is(err, context.Canceled) {
 			fmt.Fprintf(o.Err, "tern: %v\n", err)
@@ -308,6 +356,7 @@ func parseCLI(args []string, errOut io.Writer) (*cliOptions, error) {
 	fs.BoolVar(&opts.Continue, "continue", false, "continue the most recent session")
 	fs.BoolVar(&opts.Continue, "c", false, "continue the most recent session")
 	fs.StringVar(&opts.Resume, "resume", "", "resume a specific session id")
+	fs.StringVar(&opts.Provider, "provider", "", "provider preset (deepseek, openrouter, openai, groq, xai, mistral, together, ollama, lmstudio)")
 	fs.StringVar(&opts.Model, "model", "", "model name")
 	fs.StringVar(&opts.BaseURL, "base-url", "", "OpenAI-compatible API base URL")
 	fs.BoolVar(&opts.Local, "local", false, "use a local OpenAI-compatible server (Ollama at http://localhost:11434/v1)")
@@ -329,6 +378,7 @@ func parseCLI(args []string, errOut io.Writer) (*cliOptions, error) {
 	visited := make(map[string]bool)
 	fs.Visit(func(f *flag.Flag) { visited[f.Name] = true })
 	opts.PromptSet = visited["p"] || visited["prompt"]
+	opts.ProviderSet = visited["provider"]
 	opts.ModelSet = visited["model"]
 	opts.BaseURLSet = visited["base-url"]
 	opts.PermSet = visited["permission"]
@@ -346,6 +396,7 @@ Usage:
   tern config
   tern stats [--json]
   tern doctor [--json]
+  tern providers [--json]
   tern plugin [list|new|install|remove|guide]
   tern skill [list|install|remove]
   tern theme [check|init|path|reset]
@@ -380,6 +431,7 @@ Subcommands:
   config                    print the effective configuration
   stats                     show historical usage and activity
   doctor                    diagnose the installation, toolchain and workspace
+  providers                 list built-in providers (DeepSeek, OpenRouter, OpenAI, Groq, xAI, Ollama, ...)
   plugin                    list, scaffold, install, remove or inspect plugins (alias: ext)
   skill                     list, pull/install from GitHub/URL, or remove skills
   theme                     manage local CSS design system (~/.config/tern/theme.css)
@@ -395,6 +447,9 @@ Subcommands:
 
 func loadConfig(opts *cliOptions, workDir string) (*config.Config, error) {
 	flags := &config.FlagOverrides{}
+	if opts.ProviderSet {
+		flags.Provider = &opts.Provider
+	}
 	if opts.ModelSet {
 		flags.Model = &opts.Model
 	}

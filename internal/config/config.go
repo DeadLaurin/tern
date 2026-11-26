@@ -57,6 +57,8 @@ const (
 	EnvShell                = "TERN_SHELL"
 	EnvSearchBackend        = "TERN_SEARCH_BACKEND"
 	EnvSearchEndpoint       = "TERN_SEARCH_ENDPOINT"
+	EnvProvider             = "TERN_PROVIDER"
+	EnvGenericAPIKey        = "TERN_API_KEY"
 
 	// EnvAPIKey is checked by LoadAPIKey before credentials.toml.
 	EnvAPIKey = "DEEPSEEK_API_KEY"
@@ -81,6 +83,7 @@ type ModelPricing struct {
 
 // Config is Tern's effective configuration.
 type Config struct {
+	Provider        string `toml:"provider,omitempty"`
 	Model           string `toml:"model"`
 	BaseURL         string `toml:"base_url"`
 	ReasoningEffort string `toml:"reasoning_effort"`
@@ -121,6 +124,7 @@ type LoadOptions struct {
 // FlagOverrides mirrors Config for CLI flags. Each non-nil field overrides the
 // value resolved from lower-precedence layers.
 type FlagOverrides struct {
+	Provider             *string
 	Model                *string
 	BaseURL              *string
 	ReasoningEffort      *string
@@ -140,6 +144,7 @@ type FlagOverrides struct {
 // Default returns a Config populated with built-in defaults.
 func Default() *Config {
 	return &Config{
+		Provider:             InferProviderFromBaseURL(DefaultBaseURL),
 		Model:                DefaultModel,
 		BaseURL:              DefaultBaseURL,
 		ReasoningEffort:      DefaultReasoningEffort,
@@ -212,23 +217,72 @@ func Load(opts LoadOptions) (*Config, error) {
 
 	cfg := Default()
 
+	// Track the precedence of explicit provider and base URL overrides so
+	// provider presets only fill in values that were not deliberately set by a
+	// user-facing layer with at least as much authority.
+	providerPrecedence := 0
+	baseURLPrecedence := 0
+
 	// Pricing defaults < pricing.toml < global config.toml < project config.toml.
 	if err := mergePricingFile(filepath.Join(configDir, "pricing.toml"), cfg.Pricing); err != nil {
 		return nil, err
 	}
-	if err := decodeInto(cfg, filepath.Join(configDir, "config.toml")); err != nil {
+	globalPath := filepath.Join(configDir, "config.toml")
+	projectPath := filepath.Join(workDir, ".tern", "config.toml")
+	globalRaw := readRawConfig(globalPath)
+	projectRaw := readRawConfig(projectPath)
+	if globalRaw.Provider != nil {
+		providerPrecedence = 1
+	}
+	if projectRaw.Provider != nil {
+		providerPrecedence = 2
+	}
+	if globalRaw.BaseURL != nil {
+		baseURLPrecedence = 1
+	}
+	if projectRaw.BaseURL != nil {
+		baseURLPrecedence = 2
+	}
+
+	if err := decodeInto(cfg, globalPath); err != nil {
 		return nil, err
 	}
-	if err := decodeInto(cfg, filepath.Join(workDir, ".tern", "config.toml")); err != nil {
+	if err := decodeInto(cfg, projectPath); err != nil {
 		return nil, err
 	}
 
+	if _, ok := lookupNonEmptyEnv(EnvProvider); ok {
+		providerPrecedence = 3
+	}
+	if _, ok := lookupNonEmptyEnv(EnvBaseURL); ok {
+		baseURLPrecedence = 3
+	}
 	if err := applyEnv(cfg); err != nil {
 		return nil, err
 	}
+	if opts.Flags != nil {
+		if opts.Flags.Provider != nil {
+			providerPrecedence = 4
+		}
+		if opts.Flags.BaseURL != nil {
+			baseURLPrecedence = 4
+		}
+	}
 	applyFlags(cfg, opts.Flags)
 
-	key, err := LoadAPIKey(configDir)
+	if providerPrecedence == 0 || strings.TrimSpace(cfg.Provider) == "" {
+		cfg.Provider = InferProviderFromBaseURL(cfg.BaseURL)
+	}
+	if preset, ok := LookupProvider(cfg.Provider); ok {
+		if baseURLPrecedence < providerPrecedence || cfg.BaseURL == DefaultBaseURL {
+			cfg.BaseURL = preset.BaseURL
+		}
+		if cfg.Model == DefaultModel && preset.Name != "deepseek" {
+			cfg.Model = preset.DefaultModel
+		}
+	}
+
+	key, err := LoadAPIKeyForProvider(configDir, cfg.Provider)
 	if err != nil {
 		return nil, err
 	}
@@ -238,6 +292,25 @@ func Load(opts LoadOptions) (*Config, error) {
 		return nil, err
 	}
 	return cfg, nil
+}
+
+// rawConfig captures the fields whose presence matters for layering. A nil
+// pointer means the file did not set the key.
+type rawConfig struct {
+	Provider *string `toml:"provider"`
+	BaseURL  *string `toml:"base_url"`
+}
+
+// readRawConfig returns the layer-sensitive fields defined in path. Missing or
+// malformed files yield a zero rawConfig; decodeInto reports any real error
+// later.
+func readRawConfig(path string) rawConfig {
+	var raw rawConfig
+	if _, err := os.Stat(path); err != nil {
+		return raw
+	}
+	_, _ = toml.DecodeFile(path, &raw)
+	return raw
 }
 
 // decodeInto decodes a TOML file into cfg, leaving fields absent from the file
@@ -302,6 +375,7 @@ func mergePricingFile(path string, dst map[string]ModelPricing) error {
 }
 
 func applyEnv(cfg *Config) error {
+	setStringFromEnv(&cfg.Provider, EnvProvider)
 	setStringFromEnv(&cfg.Model, EnvModel)
 	setStringFromEnv(&cfg.BaseURL, EnvBaseURL)
 	setStringFromEnv(&cfg.ReasoningEffort, EnvReasoningEffort)
@@ -399,6 +473,9 @@ func envFieldName(key string) string {
 func applyFlags(cfg *Config, flags *FlagOverrides) {
 	if flags == nil {
 		return
+	}
+	if flags.Provider != nil {
+		cfg.Provider = *flags.Provider
 	}
 	if flags.Model != nil {
 		cfg.Model = *flags.Model
