@@ -615,6 +615,37 @@ func TestApprovalAllowFlow(t *testing.T) {
 	}
 }
 
+func TestServeProvidersModelsAndCommandEndpoints(t *testing.T) {
+	env := newTestEnv(t, testEnvOptions{})
+	client := &http.Client{Timeout: 5 * time.Second}
+
+	resp, body := doJSON(t, client, http.MethodGet, env.http.URL+"/api/providers", nil)
+	if resp.StatusCode != http.StatusOK || body["providers"] == nil {
+		t.Fatalf("/api/providers = %d %v", resp.StatusCode, body)
+	}
+
+	resp, body = doJSON(t, client, http.MethodGet, env.http.URL+"/api/models", nil)
+	if resp.StatusCode != http.StatusOK || body["models"] == nil {
+		t.Fatalf("/api/models = %d %v", resp.StatusCode, body)
+	}
+
+	resp, body = doJSON(t, client, http.MethodPost, env.http.URL+"/api/provider", map[string]string{
+		"provider": "openrouter",
+		"api_key":  "sk-or-test\r\n",
+		"model":    "deepseek/deepseek-r1:free",
+	})
+	if resp.StatusCode != http.StatusOK || body["provider"] != "openrouter" {
+		t.Fatalf("POST /api/provider = %d %v", resp.StatusCode, body)
+	}
+
+	for _, ep := range []string{"/api/changelog", "/api/config", "/api/skills", "/api/plugins"} {
+		r, b := doJSON(t, client, http.MethodGet, env.http.URL+ep, nil)
+		if r.StatusCode != http.StatusOK {
+			t.Fatalf("GET %s = %d %v", ep, r.StatusCode, b)
+		}
+	}
+}
+
 func TestGeneratePasswordAndLANAddresses(t *testing.T) {
 	pw, err := GeneratePassword()
 	if err != nil {

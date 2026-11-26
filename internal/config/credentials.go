@@ -25,6 +25,38 @@ func LoadAPIKey(configDir string) (string, error) {
 	return LoadAPIKeyForProvider(configDir, "deepseek")
 }
 
+// SanitizeAPIKey removes whitespace, CR/LF, ANSI escape sequences (such as
+// Windows Terminal bracketed paste markers), control characters, and non-ASCII
+// characters (such as UTF-8 BOMs or zero-width spaces) so the resulting token
+// is always a valid HTTP Authorization header value.
+func SanitizeAPIKey(raw string) string {
+	// Strip common CSI escape sequences like \x1b[200~ / \x1b[201~ if any
+	// leaked through a terminal paste.
+	var stripped strings.Builder
+	stripped.Grow(len(raw))
+	for i := 0; i < len(raw); i++ {
+		if raw[i] == 0x1b && i+1 < len(raw) && raw[i+1] == '[' {
+			j := i + 2
+			for j < len(raw) && ((raw[j] >= '0' && raw[j] <= '9') || raw[j] == ';') {
+				j++
+			}
+			if j < len(raw) {
+				i = j
+				continue
+			}
+		}
+		stripped.WriteByte(raw[i])
+	}
+	var out strings.Builder
+	out.Grow(stripped.Len())
+	for _, r := range stripped.String() {
+		if r >= 0x21 && r <= 0x7e {
+			out.WriteRune(r)
+		}
+	}
+	return out.String()
+}
+
 // LoadAPIKeyForProvider resolves the API key for providerName. Precedence:
 //
 //  1. the provider preset's environment variable (for example
@@ -38,13 +70,13 @@ func LoadAPIKeyForProvider(configDir, providerName string) (string, error) {
 	name := normalizeProviderName(providerName)
 
 	if preset, ok := LookupProvider(name); ok && preset.EnvVar != "" {
-		if key := strings.TrimSpace(os.Getenv(preset.EnvVar)); key != "" {
+		if key := SanitizeAPIKey(os.Getenv(preset.EnvVar)); key != "" {
 			return key, nil
 		}
 	}
 
-	if name != "deepseek" || strings.TrimSpace(os.Getenv(EnvAPIKey)) == "" {
-		if key := strings.TrimSpace(os.Getenv(EnvGenericAPIKey)); key != "" {
+	if name != "deepseek" || SanitizeAPIKey(os.Getenv(EnvAPIKey)) == "" {
+		if key := SanitizeAPIKey(os.Getenv(EnvGenericAPIKey)); key != "" {
 			return key, nil
 		}
 	}
@@ -53,11 +85,11 @@ func LoadAPIKeyForProvider(configDir, providerName string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if key := strings.TrimSpace(creds.Providers[name]); key != "" {
+	if key := SanitizeAPIKey(creds.Providers[name]); key != "" {
 		return key, nil
 	}
 	if name == "deepseek" {
-		return strings.TrimSpace(creds.APIKey), nil
+		return SanitizeAPIKey(creds.APIKey), nil
 	}
 	return "", nil
 }
@@ -67,6 +99,7 @@ func LoadAPIKeyForProvider(configDir, providerName string) (string, error) {
 // directory is created with 0700 permissions if needed, and the file is written
 // atomically via a temporary file and rename.
 func SaveAPIKey(configDir, key string) error {
+	key = SanitizeAPIKey(key)
 	creds, err := loadCredentials(configDir)
 	if err != nil {
 		// Preserve the historical behaviour of always overwriting the
@@ -90,6 +123,7 @@ func SaveAPIKeyForProvider(configDir, providerName, key string) error {
 	if name == "" {
 		return errors.New("config: provider name must not be empty")
 	}
+	key = SanitizeAPIKey(key)
 
 	creds, err := loadCredentials(configDir)
 	if err != nil {

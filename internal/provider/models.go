@@ -37,6 +37,35 @@ func (c *DeepSeekClient) modelsEndpoint() string {
 	return strings.TrimRight(base, "/") + "/models"
 }
 
+// sanitizeHeaderToken strips whitespace, control characters, ANSI escape
+// sequences, and non-ASCII characters from an API key so net/http never rejects
+// the Authorization header (for example after a Windows terminal paste).
+func sanitizeHeaderToken(raw string) string {
+	var stripped strings.Builder
+	stripped.Grow(len(raw))
+	for i := 0; i < len(raw); i++ {
+		if raw[i] == 0x1b && i+1 < len(raw) && raw[i+1] == '[' {
+			j := i + 2
+			for j < len(raw) && ((raw[j] >= '0' && raw[j] <= '9') || raw[j] == ';') {
+				j++
+			}
+			if j < len(raw) {
+				i = j
+				continue
+			}
+		}
+		stripped.WriteByte(raw[i])
+	}
+	var out strings.Builder
+	out.Grow(stripped.Len())
+	for _, r := range stripped.String() {
+		if r >= 0x21 && r <= 0x7e {
+			out.WriteRune(r)
+		}
+	}
+	return out.String()
+}
+
 // ListModels fetches the available models from the provider's OpenAI-compatible
 // GET /models endpoint (including OpenRouter pricing, context length, and free
 // tier metadata when present).
@@ -46,7 +75,7 @@ func (c *DeepSeekClient) ListModels(ctx context.Context) ([]RemoteModel, error) 
 		return nil, fmt.Errorf("provider: build models request: %w", err)
 	}
 	req.Header.Set("Accept", "application/json")
-	if key := strings.TrimSpace(c.APIKey); key != "" {
+	if key := sanitizeHeaderToken(c.APIKey); key != "" {
 		req.Header.Set("Authorization", "Bearer "+key)
 	}
 	for k, v := range c.ExtraHeaders {

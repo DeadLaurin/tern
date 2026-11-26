@@ -4,6 +4,18 @@ All notable changes to tern are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and tern adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v0.6.2] - 2026-11-26
+
+### Added
+- **3-step Provider → Connect → Model wizard**: clear visual stepper (`① Provider → ② Connect → ③ Model`) in both the TUI and `tern serve`, automatically transitioning from provider setup into that provider's live model picker, plus a `p` shortcut inside `/model` to switch providers.
+- **Full `tern serve` command & modal parity**: added `/api/providers`, `/api/provider`, `/api/models`, `/api/changelog`, `/api/config`, `/api/skills`, `/api/plugins`, and `/api/undo`, along with the interactive Provider → Model modal (with `[FREE]` badges, Free-only toggle, sort, and search), What's New modal, and full slash-command parity (`/provider`, `/model`, `/model free`, `/thinking`, `/tools`, `/copy`, `/changelog`, `/config`, `/skills`, `/plugins`, `/stats`, `/undo`, `/steer`).
+
+### Changed
+- **Visible API key input**: pasting or typing an API key in the setup modal now shows the actual key in a clean bordered box (replacing the placeholder cleanly with a character-count confirmation) instead of hiding it behind dots.
+
+### Fixed
+- **Windows `Authorization` header error**: sanitized API keys on paste, save, load, and HTTP request construction to strip CR/LF, bracketed-paste ANSI escape sequences, UTF-8 BOMs, and control characters so `net/http` never rejects pasted keys on Windows.
+
 ## [v0.6.1] - 2026-11-26
 
 ### Added
@@ -103,6 +115,7 @@ All notable changes to tern are documented here. The format is based on
 - `tern doctor` section headers render in order.
 - All `IsParallelSafe` tools, including task sub-agents, run concurrently.
 
+[v0.6.2]: https://github.com/DeadLaurin/tern/compare/v0.6.1...v0.6.2
 [v0.6.1]: https://github.com/DeadLaurin/tern/compare/v0.6.0...v0.6.1
 [v0.6.0]: https://github.com/DeadLaurin/tern/compare/v0.5.1...v0.6.0
 [v0.5.1]: https://github.com/DeadLaurin/tern/compare/v0.5.0...v0.5.1

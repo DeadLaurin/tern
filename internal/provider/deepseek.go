@@ -209,8 +209,8 @@ func (c *DeepSeekClient) doWithRetry(ctx context.Context, body []byte) (*http.Re
 		}
 		httpReq.Header.Set("Content-Type", "application/json")
 		httpReq.Header.Set("Accept", "text/event-stream")
-		if strings.TrimSpace(c.APIKey) != "" {
-			httpReq.Header.Set("Authorization", "Bearer "+c.APIKey)
+		if token := sanitizeHeaderToken(c.APIKey); token != "" {
+			httpReq.Header.Set("Authorization", "Bearer "+token)
 		}
 		for key, value := range c.ExtraHeaders {
 			httpReq.Header.Set(key, value)

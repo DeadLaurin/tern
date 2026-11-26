@@ -69,3 +69,26 @@ func TestListModelsOpenRouterPricingAndFreeDetection(t *testing.T) {
 		t.Fatalf("models[2] = %+v, want zero-price model marked IsFree", models[2])
 	}
 }
+
+func TestSanitizeHeaderTokenStripsWindowsPasteArtifacts(t *testing.T) {
+	dirty := "\ufeff\x1b[200~ sk-or-v1-abc123\r\n\x00\x1b[201~ "
+	if got := sanitizeHeaderToken(dirty); got != "sk-or-v1-abc123" {
+		t.Fatalf("sanitizeHeaderToken = %q, want %q", got, "sk-or-v1-abc123")
+	}
+
+	var gotAuth string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotAuth = r.Header.Get("Authorization")
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"data":[]}`))
+	}))
+	defer server.Close()
+
+	client := NewOpenAICompatClient("openrouter", server.URL+"/v1", dirty, nil)
+	if _, err := client.ListModels(context.Background()); err != nil {
+		t.Fatalf("ListModels with dirty key failed: %v", err)
+	}
+	if gotAuth != "Bearer sk-or-v1-abc123" {
+		t.Fatalf("Authorization = %q, want %q", gotAuth, "Bearer sk-or-v1-abc123")
+	}
+}

@@ -35,7 +35,7 @@ type providerSetupState struct {
 	step     providerSetupStep
 	options  []providerOption
 
-	// Step 1 form fields.
+	// Step 2 form fields.
 	fieldIdx int
 	apiKey   []rune
 	model    []rune
@@ -74,14 +74,14 @@ func (m *Model) buildProviderOptions() []providerOption {
 	opts := make([]providerOption, 0, len(presets)+1)
 	notes := map[string]string{
 		"deepseek":   "fast, affordable, prompt caching",
-		"openrouter": "300+ models (Claude, GPT, Gemini, DeepSeek)",
+		"openrouter": "300+ models (Claude, GPT, Gemini, DeepSeek, free tier)",
 		"openai":     "GPT-4.1, o3, o4-mini",
 		"groq":       "ultra-fast inference",
 		"xai":        "Grok models",
 		"mistral":    "Mistral & Codestral",
 		"together":   "open-weight hosted models",
-		"ollama":     "local models · no API key needed",
-		"lmstudio":   "local models · no API key needed",
+		"ollama":     "local models · no key needed",
+		"lmstudio":   "local models · no key needed",
 	}
 	for _, p := range presets {
 		local := p.EnvVar == ""
@@ -151,7 +151,10 @@ func (m *Model) providerFieldCount(opt providerOption) int {
 	if opt.custom {
 		return 3 // Base URL, Model, API Key (optional)
 	}
-	return 2 // Cloud: API Key, Model | Local: Model, Base URL
+	if opt.local {
+		return 1 // Base URL (model picked in Step 3!)
+	}
+	return 1 // Cloud: API Key only (model picked in Step 3!)
 }
 
 func (m *Model) activeProviderFieldBuf(opt providerOption, ps *providerSetupState) *[]rune {
@@ -166,15 +169,9 @@ func (m *Model) activeProviderFieldBuf(opt providerOption, ps *providerSetupStat
 		}
 	}
 	if opt.local {
-		if ps.fieldIdx == 0 {
-			return &ps.model
-		}
 		return &ps.baseURL
 	}
-	if ps.fieldIdx == 0 {
-		return &ps.apiKey
-	}
-	return &ps.model
+	return &ps.apiKey
 }
 
 func (m *Model) handleProviderModalKey(msg tea.KeyMsg) tea.Cmd {
@@ -255,10 +252,12 @@ func (m *Model) handleProviderConfigureKey(msg tea.KeyMsg) tea.Cmd {
 	buf := m.activeProviderFieldBuf(opt, ps)
 
 	if msg.Paste && msg.Type == tea.KeyRunes {
-		cleaned := strings.ReplaceAll(strings.ReplaceAll(string(msg.Runes), "\r", ""), "\n", "")
-		*buf = append(*buf, []rune(cleaned)...)
-		ps.errMsg = ""
-		m.dirty = true
+		cleaned := cleanSetupInput(string(msg.Runes), opt, ps.fieldIdx)
+		if cleaned != "" {
+			*buf = append(*buf, []rune(cleaned)...)
+			ps.errMsg = ""
+			m.dirty = true
+		}
 		return nil
 	}
 
@@ -269,12 +268,16 @@ func (m *Model) handleProviderConfigureKey(msg tea.KeyMsg) tea.Cmd {
 		m.dirty = true
 		return nil
 	case tea.KeyTab, tea.KeyDown:
-		ps.fieldIdx = (ps.fieldIdx + 1) % fieldCount
-		m.dirty = true
+		if fieldCount > 1 {
+			ps.fieldIdx = (ps.fieldIdx + 1) % fieldCount
+			m.dirty = true
+		}
 		return nil
 	case tea.KeyShiftTab, tea.KeyUp:
-		ps.fieldIdx = (ps.fieldIdx - 1 + fieldCount) % fieldCount
-		m.dirty = true
+		if fieldCount > 1 {
+			ps.fieldIdx = (ps.fieldIdx - 1 + fieldCount) % fieldCount
+			m.dirty = true
+		}
 		return nil
 	case tea.KeyBackspace:
 		if len(*buf) > 0 {
@@ -289,19 +292,47 @@ func (m *Model) handleProviderConfigureKey(msg tea.KeyMsg) tea.Cmd {
 		m.dirty = true
 		return nil
 	case tea.KeySpace:
-		*buf = append(*buf, ' ')
-		ps.errMsg = ""
-		m.dirty = true
+		if !isAPIKeyField(opt, ps.fieldIdx) {
+			*buf = append(*buf, ' ')
+			ps.errMsg = ""
+			m.dirty = true
+		}
 		return nil
 	case tea.KeyRunes:
-		*buf = append(*buf, msg.Runes...)
-		ps.errMsg = ""
-		m.dirty = true
+		cleaned := cleanSetupInput(string(msg.Runes), opt, ps.fieldIdx)
+		if cleaned != "" {
+			*buf = append(*buf, []rune(cleaned)...)
+			ps.errMsg = ""
+			m.dirty = true
+		}
 		return nil
 	case tea.KeyEnter:
 		return m.commitProviderSetup(opt, ps)
 	}
 	return nil
+}
+
+func isAPIKeyField(opt providerOption, fieldIdx int) bool {
+	if opt.custom {
+		return fieldIdx == 2
+	}
+	if opt.local {
+		return false
+	}
+	return fieldIdx == 0
+}
+
+func cleanSetupInput(raw string, opt providerOption, fieldIdx int) string {
+	if isAPIKeyField(opt, fieldIdx) {
+		return config.SanitizeAPIKey(raw)
+	}
+	var out strings.Builder
+	for _, r := range raw {
+		if r >= 0x20 && r != 0x7f {
+			out.WriteRune(r)
+		}
+	}
+	return out.String()
 }
 
 func (m *Model) commitProviderSetup(opt providerOption, ps *providerSetupState) tea.Cmd {
@@ -315,7 +346,7 @@ func (m *Model) commitProviderSetup(opt providerOption, ps *providerSetupState) 
 	if model == "" {
 		model = opt.defaultModel
 	}
-	if opt.custom {
+	if opt.custom || opt.local {
 		u, err := url.Parse(baseURL)
 		if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
 			ps.errMsg = "Enter a valid http:// or https:// Base URL."
@@ -326,17 +357,20 @@ func (m *Model) commitProviderSetup(opt providerOption, ps *providerSetupState) 
 
 	if opt.local {
 		apiKey = "local"
-	} else if !opt.custom && apiKey == "" {
-		if opt.hasSavedKey && m.opts.GlobalConfigDir != "" {
-			if saved, err := config.LoadAPIKeyForProvider(m.opts.GlobalConfigDir, opt.name); err == nil && strings.TrimSpace(saved) != "" {
-				apiKey = strings.TrimSpace(saved)
+	} else {
+		apiKey = config.SanitizeAPIKey(apiKey)
+		if !opt.custom && apiKey == "" {
+			if opt.hasSavedKey && m.opts.GlobalConfigDir != "" {
+				if saved, err := config.LoadAPIKeyForProvider(m.opts.GlobalConfigDir, opt.name); err == nil && strings.TrimSpace(saved) != "" {
+					apiKey = config.SanitizeAPIKey(saved)
+				}
 			}
-		}
-		if apiKey == "" {
-			ps.errMsg = fmt.Sprintf("Enter your %s API key (or press Esc to pick another provider).", opt.displayName)
-			ps.fieldIdx = 0
-			m.dirty = true
-			return nil
+			if apiKey == "" {
+				ps.errMsg = fmt.Sprintf("Paste your %s API key above (or press Esc to pick another provider).", opt.displayName)
+				ps.fieldIdx = 0
+				m.dirty = true
+				return nil
+			}
 		}
 	}
 
@@ -357,10 +391,43 @@ func (m *Model) commitProviderSetup(opt providerOption, ps *providerSetupState) 
 	m.cachedModelsKey = ""
 	m.cachedModels = nil
 	m.ctxWindow = defaultContextWindow(m.opts)
-	m.closeModal()
-	m.statusMsg = fmt.Sprintf("Using %s · %s", opt.displayName, model)
-	m.addInfo(fmt.Sprintf("Provider configured: %s (%s). Switch anytime with /provider.", opt.displayName, model))
-	return nil
+
+	// Step 3 of 3: seamlessly open the live model picker for this provider.
+	cmd := m.openModelModalWithFilter(false)
+	m.modal.fromProviderSetup = true
+	m.statusMsg = fmt.Sprintf("Step 3 of 3 · Choose a model from %s", opt.displayName)
+	return cmd
+}
+
+func (m *Model) renderSetupStepper(step int, providerLabel string) string {
+	s1 := "① Provider"
+	if providerLabel != "" && step > 1 {
+		s1 = "✓ Provider (" + providerLabel + ")"
+	} else if step == 1 {
+		s1 = "● ① Provider"
+	}
+	s2 := "② Connect"
+	if step > 2 {
+		s2 = "✓ Connected"
+	} else if step == 2 {
+		s2 = "● ② Connect"
+	}
+	s3 := "③ Model"
+	if step == 3 {
+		s3 = "● ③ Model"
+	}
+
+	paintStep := func(idx int, label string) string {
+		if idx < step {
+			return m.st.paint(m.st.success, label)
+		}
+		if idx == step {
+			return m.st.paint(m.st.selected, label)
+		}
+		return m.st.paint(m.st.dim, label)
+	}
+	arrow := m.st.paint(m.st.dim, "  →  ")
+	return paintStep(1, s1) + arrow + paintStep(2, s2) + arrow + paintStep(3, s3)
 }
 
 func (m *Model) providerModalView() string {
@@ -373,15 +440,17 @@ func (m *Model) providerModalView() string {
 
 func (m *Model) providerSelectView(ps *providerSetupState) string {
 	m.modalRows = nil
-	title := "Switch AI Provider"
-	subtitle := "Choose a cloud provider or a local OpenAI-compatible server."
+	title := "Choose Provider"
+	subtitle := "Select a provider, connect it, then pick any model from that provider."
 	if ps.firstRun {
-		title = "Welcome to tern — Choose your AI provider"
-		subtitle = "DeepSeek is recommended for tern's speed & prompt caching. Or pick OpenRouter, another cloud API, or a local LLM."
+		title = "Welcome to tern"
+		subtitle = "DeepSeek is recommended for tern's speed & prompt caching. Or choose OpenRouter, another cloud API, or a local LLM."
 	}
 
 	width := m.modalTextWidth()
 	var lines []string
+	lines = append(lines, m.renderSetupStepper(1, ""))
+	lines = append(lines, "")
 	for _, wline := range strings.Split(wrapPlainCell(subtitle, maxInt(24, width-2)), "\n") {
 		lines = append(lines, m.st.paint(m.st.dim, wline))
 	}
@@ -394,7 +463,7 @@ func (m *Model) providerSelectView(ps *providerSetupState) string {
 		selected := i == m.modal.index
 		marker := "  "
 		if selected {
-			marker = "› "
+			marker = "▸ "
 			if m.st.plain {
 				marker = "> "
 			}
@@ -409,7 +478,7 @@ func (m *Model) providerSelectView(ps *providerSetupState) string {
 		switch {
 		case opt.recommended:
 			if opt.hasSavedKey {
-				badge = m.st.paint(m.st.success, "★ recommended · key saved")
+				badge = m.st.paint(m.st.success, "★ recommended · saved")
 			} else {
 				badge = m.st.paint(m.st.accent, "★ recommended")
 			}
@@ -433,9 +502,9 @@ func (m *Model) providerSelectView(ps *providerSetupState) string {
 		lines = append(lines, line)
 	}
 
-	footer := "↑/↓ move · 1-9 quick pick · Enter select · Esc close"
+	footer := "↑/↓ move · 1-9 quick pick · Enter next · Esc close"
 	if ps.firstRun {
-		footer = "↑/↓ move · 1-9 quick pick · Enter configure · Ctrl+C quit"
+		footer = "↑/↓ move · 1-9 quick pick · Enter next · Ctrl+C quit"
 	}
 	return m.modalFrame(title, strings.Join(lines, "\n"), footer)
 }
@@ -446,14 +515,18 @@ func (m *Model) providerConfigureView(ps *providerSetupState) string {
 		return ""
 	}
 	opt := ps.options[m.modal.index]
-	title := fmt.Sprintf("Configure %s", opt.displayName)
+	title := fmt.Sprintf("Connect to %s", opt.displayName)
 	if opt.recommended {
 		title += " ★"
 	}
 
+	boxInner := maxInt(28, m.modalTextWidth()-8)
 	var lines []string
+	lines = append(lines, m.renderSetupStepper(2, opt.displayName))
+	lines = append(lines, "")
+
 	if opt.local {
-		lines = append(lines, m.st.paint(m.st.dim, "Local server — no API key required. Press Enter to connect."))
+		lines = append(lines, m.st.paint(m.st.dim, "Local server — no API key needed. Press Enter to browse available models."))
 	} else if opt.custom {
 		lines = append(lines, m.st.paint(m.st.dim, "Connect to any OpenAI-compatible /v1 endpoint."))
 	} else {
@@ -462,54 +535,81 @@ func (m *Model) providerConfigureView(ps *providerSetupState) string {
 			hint += fmt.Sprintf("  (%s)", opt.envVar)
 		}
 		lines = append(lines, m.st.paint(m.st.dim, hint))
-		lines = append(lines, m.st.paint(m.st.dim, "Saved securely to ~/.config/tern/credentials.toml (0600)."))
+		lines = append(lines, m.st.paint(m.st.dim, "Saved to ~/.config/tern/credentials.toml (0600). Next you'll pick a model."))
 	}
 	lines = append(lines, "")
 
-	renderField := func(idx int, label, value, placeholder string, secret bool) {
+	renderInputBox := func(idx int, label, value, placeholder string) {
 		active := ps.fieldIdx == idx
-		prefix := "  "
-		labelText := m.st.paint(m.st.dim, label)
+		labelLine := "  " + m.st.paint(m.st.dim, label)
 		if active {
-			prefix = m.st.paint(m.st.accent, "› ")
-			labelText = m.st.paint(m.st.selected, label)
+			labelLine = m.st.paint(m.st.accent, "▸ ") + m.st.paint(m.st.selected, label)
 		}
-		display := value
-		if secret && len(value) > 0 {
-			display = strings.Repeat("•", len([]rune(value)))
+		if len([]rune(value)) > 0 {
+			labelLine += "  " + m.st.paint(m.st.success, fmt.Sprintf("✓ %d chars", len([]rune(value))))
 		}
-		if display == "" {
-			display = m.st.paint(m.st.dim, placeholder)
+		lines = append(lines, labelLine)
+
+		// Show the actual typed/pasted text clearly (no hidden dots so pasting is
+		// obvious and verifiable). Placeholder only appears when empty.
+		innerText := ""
+		if value == "" {
+			innerText = m.st.paint(m.st.dim, truncateCell(placeholder, boxInner-2))
+			if active {
+				innerText = m.st.paint(m.st.accent, "▏") + innerText
+			}
+		} else {
+			visible := value
+			runes := []rune(visible)
+			maxChars := boxInner - 3
+			if maxChars < 10 {
+				maxChars = 10
+			}
+			if len(runes) > maxChars {
+				visible = "…" + string(runes[len(runes)-(maxChars-1):])
+			}
+			innerText = visible
+			if active {
+				innerText += m.st.paint(m.st.accent, "▏")
+			}
 		}
-		cursor := ""
-		if active {
-			cursor = m.st.paint(m.st.accent, "▏")
+
+		if m.st.plain {
+			lines = append(lines, "  [ "+innerText+" ]")
+		} else {
+			borderStyle := m.st.dim
+			if active {
+				borderStyle = m.st.accent
+			}
+			top := "  " + m.st.paint(borderStyle, "┌"+strings.Repeat("─", boxInner)+"┐")
+			mid := "  " + m.st.paint(borderStyle, "│ ") + innerText
+			bot := "  " + m.st.paint(borderStyle, "└"+strings.Repeat("─", boxInner)+"┘")
+			lines = append(lines, top, mid, bot)
 		}
-		lines = append(lines, fmt.Sprintf("%s%s", prefix, labelText))
-		lines = append(lines, fmt.Sprintf("    %s%s", display, cursor))
 		lines = append(lines, "")
 	}
 
 	if opt.custom {
-		renderField(0, "Base URL", string(ps.baseURL), "http://localhost:8000/v1", false)
-		renderField(1, "Model", string(ps.model), "model-name", false)
-		renderField(2, "API Key (optional)", string(ps.apiKey), "leave empty for local/unauthenticated servers", true)
+		renderInputBox(0, "Base URL", string(ps.baseURL), "http://localhost:8000/v1")
+		renderInputBox(1, "Default Model", string(ps.model), "model-name")
+		renderInputBox(2, "API Key (optional)", string(ps.apiKey), "leave empty for local/unauthenticated servers")
 	} else if opt.local {
-		renderField(0, "Model", string(ps.model), opt.defaultModel, false)
-		renderField(1, "Base URL", string(ps.baseURL), opt.baseURL, false)
+		renderInputBox(0, "Base URL", string(ps.baseURL), opt.baseURL)
 	} else {
-		keyPlaceholder := "paste your API key…"
+		keyPlaceholder := "paste your " + opt.displayName + " API key here"
 		if opt.hasSavedKey {
-			keyPlaceholder = "saved — press Enter to keep, or paste a new key"
+			keyPlaceholder = "key already saved — press Enter to keep, or paste a new one"
 		}
-		renderField(0, "API Key", string(ps.apiKey), keyPlaceholder, true)
-		renderField(1, "Model", string(ps.model), opt.defaultModel, false)
+		renderInputBox(0, opt.displayName+" API Key", string(ps.apiKey), keyPlaceholder)
 	}
 
 	if ps.errMsg != "" {
 		lines = append(lines, m.st.paint(m.st.error, "⚠ "+ps.errMsg))
 	}
 
-	footer := "Enter save & start · Tab switch field · Ctrl+U clear · Esc back"
+	footer := "Enter connect & pick model · Ctrl+U clear · Esc back"
+	if opt.custom {
+		footer = "Enter connect & pick model · Tab next field · Ctrl+U clear · Esc back"
+	}
 	return m.modalFrame(title, strings.Join(lines, "\n"), footer)
 }

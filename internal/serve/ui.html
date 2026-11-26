@@ -531,6 +531,159 @@
   @media (max-width: 420px) {
     .emblem { font-size: 6.5px; }
   }
+
+  /* Visibility toggles for /thinking and /tools */
+  #app.hide-thinking .reasoning { display: none; }
+  #app.hide-tools .tool-card { display: none; }
+
+  /* Centered CLI-styled modal overlay (Provider -> Model wizard & Changelog) */
+  .modal-backdrop {
+    position: fixed;
+    inset: 0;
+    background: rgba(10, 12, 16, 0.72);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 16px;
+    z-index: 60;
+  }
+  .modal-backdrop.hidden { display: none; }
+  .modal-box {
+    width: 100%;
+    max-width: 680px;
+    max-height: 84dvh;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    box-shadow: 0 18px 48px rgba(0, 0, 0, 0.45);
+  }
+  .modal-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 12px 16px;
+    border-bottom: 1px solid var(--border);
+    gap: 10px;
+  }
+  .modal-title { font-weight: 600; color: var(--accent); }
+  .modal-close {
+    background: transparent;
+    border: 1px solid var(--border);
+    color: var(--muted);
+    font: inherit;
+    padding: 2px 8px;
+    border-radius: 4px;
+    cursor: pointer;
+  }
+  .modal-close:hover { color: var(--text); border-color: var(--muted); }
+  .modal-body {
+    padding: 14px 16px;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+  .modal-foot {
+    padding: 10px 16px;
+    border-top: 1px solid var(--border);
+    color: var(--subtle);
+    font-size: 0.85em;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    flex-wrap: wrap;
+  }
+  .stepper {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 0.86em;
+    color: var(--subtle);
+    flex-wrap: wrap;
+  }
+  .stepper .st-active { color: var(--accent); font-weight: 600; }
+  .stepper .st-done { color: var(--sage); }
+  .modal-list {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    max-height: 46dvh;
+    overflow-y: auto;
+  }
+  .modal-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    padding: 8px 10px;
+    border: 1px solid transparent;
+    border-radius: 4px;
+    cursor: pointer;
+    background: transparent;
+    color: var(--text);
+    font: inherit;
+    text-align: left;
+    width: 100%;
+  }
+  .modal-row:hover { border-color: var(--border); background: rgba(255,255,255,0.03); }
+  .modal-row.active { border-color: var(--muted); background: rgba(255,255,255,0.06); }
+  .modal-row-main { display: flex; align-items: center; gap: 8px; min-width: 0; flex: 1; }
+  .modal-row-name { font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .modal-row-meta { color: var(--subtle); font-size: 0.86em; white-space: nowrap; }
+  .badge { font-size: 0.78em; padding: 1px 6px; border-radius: 3px; border: 1px solid var(--border); }
+  .badge-free { color: var(--sage); border-color: var(--sage); }
+  .badge-rec { color: var(--amber); border-color: var(--amber); }
+  .badge-saved { color: var(--sage); }
+  .modal-input {
+    width: 100%;
+    background: transparent;
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    color: var(--text);
+    font: inherit;
+    padding: 8px 10px;
+    outline: none;
+  }
+  .modal-input:focus { border-color: var(--accent); }
+  .modal-field label { display: block; color: var(--muted); font-size: 0.86em; margin-bottom: 4px; }
+  .modal-err { color: var(--coral); font-size: 0.9em; }
+  .filter-bar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .filter-bar .modal-input { flex: 1; min-width: 150px; padding: 6px 8px; }
+  .chip-btn {
+    background: transparent;
+    border: 1px solid var(--border);
+    color: var(--muted);
+    font: inherit;
+    font-size: 0.86em;
+    padding: 5px 10px;
+    border-radius: 4px;
+    cursor: pointer;
+  }
+  .chip-btn:hover { color: var(--text); border-color: var(--muted); }
+  .chip-btn.on { color: var(--sage); border-color: var(--sage); }
+  .sb-btn {
+    background: transparent;
+    border: 1px solid var(--border);
+    color: var(--text);
+    font: inherit;
+    font-size: 0.9em;
+    padding: 3px 8px;
+    border-radius: 4px;
+    cursor: pointer;
+    max-width: 165px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .sb-btn:hover { border-color: var(--accent); }
+  .changelog-body { font-size: 0.92em; line-height: 1.55; color: var(--text); }
+  .changelog-body h2 { font-size: 1.05em; color: var(--accent); margin: 14px 0 6px; }
+  .changelog-body h3 { font-size: 0.95em; color: var(--sage); margin: 10px 0 4px; }
+  .changelog-body ul { margin: 4px 0 8px 18px; padding: 0; }
 </style>
 <link rel="stylesheet" href="/theme.css">
 </head>
@@ -635,6 +788,10 @@
       <div class="sb-head">SESSION</div>
       <div class="sb-controls">
         <div class="sb-row">
+          <span class="sb-dim">provider</span>
+          <button class="sb-btn" id="providerBtn" type="button">deepseek</button>
+        </div>
+        <div class="sb-row">
           <span class="sb-dim">model</span>
           <select class="sb-select" id="model"></select>
         </div>
@@ -663,6 +820,17 @@
   </aside>
 </div>
 
+<div class="modal-backdrop hidden" id="modalBackdrop">
+  <div class="modal-box" role="dialog" aria-modal="true">
+    <div class="modal-head">
+      <div class="modal-title" id="modalTitle">Modal</div>
+      <button class="modal-close" id="modalClose" type="button">Esc</button>
+    </div>
+    <div class="modal-body" id="modalBody"></div>
+    <div class="modal-foot" id="modalFoot"></div>
+  </div>
+</div>
+
 <script>
 (function () {
   "use strict";
@@ -670,16 +838,28 @@
   var MODELS = ["deepseek-flash", "deepseek-v4-pro"];
   var EFFORTS = ["none", "low", "high", "max"];
   var SLASH_COMMANDS = [
-    { name: "clear",   desc: "Clear transcript view" },
-    { name: "compact", desc: "Compact conversation context" },
-    { name: "context", desc: "Show context token usage" },
-    { name: "cost",    desc: "Show session cost & cache" },
-    { name: "effort",  desc: "Cycle or set reasoning effort" },
-    { name: "help",    desc: "Show available commands" },
-    { name: "model",   desc: "Switch model (flash / pro)" },
-    { name: "plan",    desc: "Toggle read-only plan mode" },
-    { name: "version", desc: "Show tern version" },
-    { name: "yolo",    desc: "Toggle allow-all permission mode" }
+    { name: "changelog", desc: "Show what's new in tern" },
+    { name: "clear",     desc: "Clear transcript view" },
+    { name: "compact",   desc: "Compact conversation context" },
+    { name: "config",    desc: "Show effective settings" },
+    { name: "context",   desc: "Show context token usage" },
+    { name: "copy",      desc: "Copy last assistant response" },
+    { name: "cost",      desc: "Show session cost & cache" },
+    { name: "effort",    desc: "Cycle or set reasoning effort" },
+    { name: "ext",       desc: "List loaded plugins (alias)" },
+    { name: "help",      desc: "Show available commands" },
+    { name: "model",     desc: "Browse & switch models (/model free)" },
+    { name: "plan",      desc: "Toggle read-only plan mode" },
+    { name: "plugins",   desc: "List loaded plugins" },
+    { name: "provider",  desc: "Choose or switch AI provider" },
+    { name: "skills",    desc: "List discovered skills" },
+    { name: "stats",     desc: "Usage, cache & cost summary" },
+    { name: "steer",     desc: "Steer active turn mid-flight" },
+    { name: "thinking",  desc: "Toggle thinking visibility or effort" },
+    { name: "tools",     desc: "Toggle tool display (compact/hidden)" },
+    { name: "undo",      desc: "Undo latest file edit turn" },
+    { name: "version",   desc: "Show tern version" },
+    { name: "yolo",      desc: "Toggle allow-all permission mode" }
   ];
   var SPINNER = ["⠋","⠙","⠹","⠸","⠼","⠴","⠦","⠧","⠇","⠏"];
 
@@ -715,6 +895,7 @@
     sbCtx: document.getElementById("sbCtx"),
     sbCache: document.getElementById("sbCache"),
     sbStats: document.getElementById("sbStats"),
+    providerBtn: document.getElementById("providerBtn"),
     model: document.getElementById("model"),
     effort: document.getElementById("effort"),
     perm: document.getElementById("perm"),
@@ -723,7 +904,12 @@
     mobMeta: document.getElementById("mobMeta"),
     mobMenuBtn: document.getElementById("mobMenuBtn"),
     drawerBackdrop: document.getElementById("drawerBackdrop"),
-    sbClose: document.getElementById("sbClose")
+    sbClose: document.getElementById("sbClose"),
+    modalBackdrop: document.getElementById("modalBackdrop"),
+    modalTitle: document.getElementById("modalTitle"),
+    modalBody: document.getElementById("modalBody"),
+    modalFoot: document.getElementById("modalFoot"),
+    modalClose: document.getElementById("modalClose")
   };
 
   var state = {
@@ -881,6 +1067,7 @@
     el.sbVer.textContent = "tern " + ver;
     el.mobVer.textContent = ver;
     el.sbDir.textContent = st.work_dir ? shortPath(st.work_dir) : "";
+    if (el.providerBtn) { el.providerBtn.textContent = st.provider || "deepseek"; }
 
     fillModels(st.model);
     el.model.value = st.model;
@@ -950,8 +1137,10 @@
 
   function renderStatusBar(st) {
     var parts = [];
+    var prov = st.provider || "deepseek";
+    parts.push({ text: prov, click: openProviderModal });
     var mLabel = (st.model || "deepseek-flash") + (st.effort ? " (" + st.effort + ")" : "");
-    parts.push({ text: mLabel, click: cycleModel });
+    parts.push({ text: mLabel, click: function () { openModelModal(false, false); } });
     var mode = st.permission || "ask";
     parts.push({ text: mode === "yolo" ? "YOLO" : mode, yolo: mode === "yolo", click: toggleYolo });
     if (st.tokens_per_sec > 0) {
@@ -1471,6 +1660,211 @@
     el.slashMenu.classList.remove("hidden");
   }
 
+  /* ---------------- modals (Provider -> Model wizard & Changelog) ---------------- */
+
+  function openModal(title, bodyHTML, footHTML) {
+    el.modalTitle.textContent = title;
+    el.modalBody.innerHTML = bodyHTML;
+    el.modalFoot.innerHTML = footHTML || "";
+    el.modalBackdrop.classList.remove("hidden");
+  }
+  function closeModal() {
+    el.modalBackdrop.classList.add("hidden");
+    el.modalBody.innerHTML = "";
+    el.input.focus();
+  }
+  el.modalClose.addEventListener("click", closeModal);
+  el.modalBackdrop.addEventListener("click", function (ev) {
+    if (ev.target === el.modalBackdrop) { closeModal(); }
+  });
+  if (el.providerBtn) {
+    el.providerBtn.addEventListener("click", function () { closeDrawer(); openProviderModal(); });
+  }
+
+  function stepperHTML(step, provLabel) {
+    var s1 = step > 1 && provLabel ? "✓ Provider (" + escapeHTML(provLabel) + ")" : (step === 1 ? "● ① Provider" : "① Provider");
+    var s2 = step > 2 ? "✓ Connected" : (step === 2 ? "● ② Connect" : "② Connect");
+    var s3 = step === 3 ? "● ③ Model" : "③ Model";
+    var cls = function (n) { return n < step ? "st-done" : (n === step ? "st-active" : ""); };
+    return '<div class="stepper">' +
+      '<span class="' + cls(1) + '">' + s1 + '</span><span>→</span>' +
+      '<span class="' + cls(2) + '">' + s2 + '</span><span>→</span>' +
+      '<span class="' + cls(3) + '">' + s3 + '</span></div>';
+  }
+
+  function openProviderModal() {
+    openModal("Choose AI Provider", stepperHTML(1, "") + '<div class="sb-dim">Loading providers…</div>', "Select a provider to configure it, then choose a model.");
+    api("/api/providers").then(function (data) {
+      var list = data.providers || [];
+      var body = stepperHTML(1, "") + '<div class="modal-list" id="provList"></div>';
+      openModal("Choose AI Provider", body, "Step 1 of 3 · Pick a provider");
+      var box = document.getElementById("provList");
+      list.forEach(function (p) {
+        var btn = document.createElement("button");
+        btn.type = "button";
+        btn.className = "modal-row" + (p.active ? " active" : "");
+        var badges = "";
+        if (p.recommended) { badges += '<span class="badge badge-rec">★ recommended</span>'; }
+        if (p.local) { badges += '<span class="badge">local · no key</span>'; }
+        else if (p.has_key) { badges += '<span class="badge badge-saved">key saved</span>'; }
+        btn.innerHTML =
+          '<span class="modal-row-main"><span class="modal-row-name">' + escapeHTML(p.display_name) + '</span>' + badges + '</span>' +
+          '<span class="modal-row-meta">' + escapeHTML(p.default_model) + '</span>';
+        btn.addEventListener("click", function () { openProviderConnectModal(p); });
+        box.appendChild(btn);
+      });
+    }).catch(function (err) {
+      openModal("Choose AI Provider", '<div class="modal-err">' + escapeHTML(err.message) + '</div>', "");
+    });
+  }
+
+  function openProviderConnectModal(p) {
+    var html = stepperHTML(2, p.display_name);
+    if (p.local) {
+      html += '<div class="sb-dim">Local server — no API key needed. Next you will pick a model.</div>' +
+        '<div class="modal-field"><label>Base URL</label><input class="modal-input" id="provBaseURL" type="text" value="' + escapeHTML(p.base_url) + '"></div>';
+    } else {
+      var ph = p.has_key ? "Key already saved — leave empty to keep, or paste a new key" : ("Paste your " + p.display_name + " API key");
+      html += '<div class="sb-dim">Endpoint: ' + escapeHTML(p.base_url) + (p.env_var ? ' (' + escapeHTML(p.env_var) + ')' : '') + '</div>' +
+        '<div class="modal-field"><label>' + escapeHTML(p.display_name) + ' API Key</label><input class="modal-input" id="provAPIKey" type="text" autocomplete="off" spellcheck="false" placeholder="' + escapeHTML(ph) + '"></div>';
+    }
+    html += '<div class="modal-err" id="provErr"></div>';
+    var foot = '<button class="chip-btn" id="provBack" type="button">← Back</button>' +
+      '<button class="cli-btn ok" id="provNext" type="button">Connect &amp; pick model →</button>';
+    openModal("Connect to " + p.display_name, html, foot);
+    var keyEl = document.getElementById("provAPIKey");
+    var urlEl = document.getElementById("provBaseURL");
+    var errEl = document.getElementById("provErr");
+    if (keyEl) { keyEl.focus(); } else if (urlEl) { urlEl.focus(); }
+
+    function submitConnect() {
+      var payload = {
+        provider: p.name,
+        base_url: urlEl ? urlEl.value.trim() : p.base_url,
+        api_key: keyEl ? keyEl.value.trim() : "",
+        model: p.default_model
+      };
+      errEl.textContent = "";
+      api("/api/provider", { method: "POST", body: payload })
+        .then(function (st) {
+          applyStatus(st);
+          openModelModal(false, true);
+        })
+        .catch(function (err) { errEl.textContent = err.message; });
+    }
+    document.getElementById("provBack").addEventListener("click", openProviderModal);
+    document.getElementById("provNext").addEventListener("click", submitConnect);
+    if (keyEl) { keyEl.addEventListener("keydown", function (ev) { if (ev.key === "Enter") { ev.preventDefault(); submitConnect(); } }); }
+    if (urlEl) { urlEl.addEventListener("keydown", function (ev) { if (ev.key === "Enter") { ev.preventDefault(); submitConnect(); } }); }
+  }
+
+  function openModelModal(freeOnly, fromSetup) {
+    var prov = (state.status && state.status.provider) || "deepseek";
+    var header = (fromSetup ? stepperHTML(3, prov) : "") + '<div class="sb-dim">Fetching models from ' + escapeHTML(prov) + '…</div>';
+    openModal("Choose Model · " + prov, header, "");
+    api("/api/models").then(function (data) {
+      var all = data.models || [];
+      var provName = data.provider || prov;
+      var curModel = (state.status && state.status.model) || "";
+      var opts = {
+        freeOnly: !!freeOnly,
+        sort: provName === "openrouter" ? "free" : "name",
+        search: ""
+      };
+      var freeCount = all.filter(function (m) { return m.is_free; }).length;
+      var body = (fromSetup ? stepperHTML(3, provName) : "") +
+        '<div class="filter-bar">' +
+        '<input class="modal-input" id="modelSearch" type="text" placeholder="Search models…">' +
+        '<button class="chip-btn' + (opts.freeOnly ? ' on' : '') + '" id="modelFreeBtn" type="button">Free only (' + freeCount + ')</button>' +
+        '<select class="sb-select" id="modelSort">' +
+        '<option value="free"' + (opts.sort === "free" ? " selected" : "") + '>Sort: free first</option>' +
+        '<option value="price"' + (opts.sort === "price" ? " selected" : "") + '>Sort: cheapest</option>' +
+        '<option value="context"' + (opts.sort === "context" ? " selected" : "") + '>Sort: largest ctx</option>' +
+        '<option value="name"' + (opts.sort === "name" ? " selected" : "") + '>Sort: A–Z</option>' +
+        '</select></div>' +
+        '<div class="modal-list" id="modelList"></div>';
+      var foot = '<button class="chip-btn" id="modelSwitchProv" type="button">⇄ Switch provider</button>' +
+        '<span>' + all.length + ' models · ' + freeCount + ' free</span>';
+      openModal("Choose Model · " + provName, body, foot);
+
+      var listEl = document.getElementById("modelList");
+      var searchEl = document.getElementById("modelSearch");
+      var freeBtn = document.getElementById("modelFreeBtn");
+      var sortEl = document.getElementById("modelSort");
+
+      function renderList() {
+        var q = opts.search.trim().toLowerCase();
+        var rows = all.filter(function (m) {
+          if (opts.freeOnly && !m.is_free) { return false; }
+          if (q && m.id.toLowerCase().indexOf(q) === -1) { return false; }
+          return true;
+        });
+        rows.sort(function (a, b) {
+          if (opts.sort === "free") {
+            if (!!a.is_free !== !!b.is_free) { return a.is_free ? -1 : 1; }
+            return a.id.localeCompare(b.id);
+          }
+          if (opts.sort === "price") {
+            if (!!a.is_free !== !!b.is_free) { return a.is_free ? -1 : 1; }
+            var ac = (a.prompt_per_m || 0) + (a.output_per_m || 0);
+            var bc = (b.prompt_per_m || 0) + (b.output_per_m || 0);
+            if (ac !== bc) { return ac - bc; }
+            return a.id.localeCompare(b.id);
+          }
+          if (opts.sort === "context") {
+            if ((a.context_length || 0) !== (b.context_length || 0)) { return (b.context_length || 0) - (a.context_length || 0); }
+            return a.id.localeCompare(b.id);
+          }
+          return a.id.localeCompare(b.id);
+        });
+        listEl.innerHTML = "";
+        if (!rows.length) {
+          listEl.innerHTML = '<div class="sb-dim">No models match.</div>';
+          return;
+        }
+        rows.slice(0, 120).forEach(function (m) {
+          var btn = document.createElement("button");
+          btn.type = "button";
+          btn.className = "modal-row" + (m.id === curModel ? " active" : "");
+          var badge = m.is_free ? '<span class="badge badge-free">FREE</span>' :
+            (m.has_pricing ? '<span class="modal-row-meta">$' + (m.prompt_per_m || 0).toFixed(2) + '/$' + (m.output_per_m || 0).toFixed(2) + '</span>' : '');
+          var ctx = m.context_length ? compactTokens(m.context_length) : "";
+          btn.innerHTML =
+            '<span class="modal-row-main"><span class="modal-row-name">' + escapeHTML(m.id) + '</span>' + badge + '</span>' +
+            '<span class="modal-row-meta">' + escapeHTML(ctx + (m.supports_vision ? " · vision" : "")) + '</span>';
+          btn.addEventListener("click", function () {
+            setModel(m.id, state.status.effort);
+            closeModal();
+          });
+          listEl.appendChild(btn);
+        });
+      }
+
+      searchEl.addEventListener("input", function () { opts.search = searchEl.value; renderList(); });
+      freeBtn.addEventListener("click", function () {
+        opts.freeOnly = !opts.freeOnly;
+        freeBtn.classList.toggle("on", opts.freeOnly);
+        renderList();
+      });
+      sortEl.addEventListener("change", function () { opts.sort = sortEl.value; renderList(); });
+      document.getElementById("modelSwitchProv").addEventListener("click", openProviderModal);
+      renderList();
+      searchEl.focus();
+    }).catch(function (err) {
+      openModal("Choose Model", '<div class="modal-err">' + escapeHTML(err.message) + '</div>', "");
+    });
+  }
+
+  function openChangelogModal() {
+    openModal("What's New", '<div class="sb-dim">Loading changelog…</div>', "");
+    api("/api/changelog").then(function (data) {
+      var html = '<div class="changelog-body">' + renderMarkdown(data.changelog || "No changelog available.") + '</div>';
+      openModal("What's New · tern " + (data.version || ""), html, "Press Esc to close");
+    }).catch(function (err) {
+      openModal("What's New", '<div class="modal-err">' + escapeHTML(err.message) + '</div>', "");
+    });
+  }
+
   function handleSlashCommand(line) {
     var parts = line.slice(1).trim().split(/\s+/);
     var cmd = (parts[0] || "").toLowerCase();
@@ -1487,22 +1881,97 @@
       case "version":
         addInfo("tern " + (state.status.version || "dev"));
         return true;
+      case "changelog":
+      case "whatsnew":
+        openChangelogModal();
+        return true;
+      case "provider":
+      case "providers":
+        openProviderModal();
+        return true;
+      case "model":
+        if (!arg) { openModelModal(false, false); }
+        else if (arg.toLowerCase() === "free") { openModelModal(true, false); }
+        else { setModel(arg, state.status.effort); }
+        return true;
+      case "effort":
+        if (arg) { setModel(state.status.model, arg); } else { cycleEffort(); }
+        return true;
+      case "thinking":
+        var tArg = arg.toLowerCase();
+        if (tArg === "hide" || tArg === "off") { el.app.classList.add("hide-thinking"); addInfo("Thinking blocks hidden."); }
+        else if (tArg === "show" || tArg === "on") { el.app.classList.remove("hide-thinking"); addInfo("Thinking blocks shown."); }
+        else if (EFFORTS.indexOf(tArg) !== -1) { setModel(state.status.model, tArg); }
+        else {
+          var hidden = el.app.classList.toggle("hide-thinking");
+          addInfo(hidden ? "Thinking blocks hidden." : "Thinking blocks shown.");
+        }
+        return true;
+      case "tools":
+        var toolArg = arg.toLowerCase();
+        if (toolArg === "hidden" || toolArg === "hide") { el.app.classList.add("hide-tools"); addInfo("Tool calls hidden."); }
+        else if (toolArg === "compact" || toolArg === "show") { el.app.classList.remove("hide-tools"); addInfo("Tool calls shown."); }
+        else {
+          var th = el.app.classList.toggle("hide-tools");
+          addInfo(th ? "Tool calls hidden." : "Tool calls shown.");
+        }
+        return true;
+      case "copy":
+        var nodes = el.transcript.querySelectorAll(".assistant-text");
+        var last = nodes.length ? nodes[nodes.length - 1].innerText : "";
+        if (!last) { addInfo("Nothing to copy yet."); return true; }
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+          navigator.clipboard.writeText(last).then(function () { addInfo("Copied last response (" + last.length + " chars)."); })
+            .catch(function (err) { addError("Copy failed: " + err.message); });
+        } else {
+          addInfo("Clipboard API unavailable in this browser context.");
+        }
+        return true;
       case "context":
         var t = state.status.context_tokens || 0;
         var w = state.status.context_window || 1000000;
         addInfo("Context: " + t + " / " + w + " tokens (" + ((t / w) * 100).toFixed(1) + "%)");
         return true;
       case "cost":
+      case "stats":
         var u = state.status.usage || {};
-        addInfo("Cost: $" + (state.status.total_cost_usd || 0).toFixed(4) +
+        addInfo("Provider: " + (state.status.provider || "deepseek") + " · Model: " + (state.status.model || "") +
+          "\nCost: $" + (state.status.total_cost_usd || 0).toFixed(4) +
           " · " + (u.prompt_tokens || 0) + " prompt, " + (u.completion_tokens || 0) + " completion" +
-          " · " + Math.round((state.status.cache_hit_rate || 0) * 100) + "% cache");
+          " · " + Math.round((state.status.cache_hit_rate || 0) * 100) + "% cache" +
+          " · uptime " + compactDuration(state.status.uptime_sec || 0));
         return true;
-      case "model":
-        if (arg) { setModel(arg, state.status.effort); } else { cycleModel(); }
+      case "config":
+        api("/api/config").then(function (c) {
+          addInfo(Object.keys(c).map(function (k) { return k + " = " + JSON.stringify(c[k]); }).join("\n"));
+        }).catch(function (err) { addError(err.message); });
         return true;
-      case "effort":
-        if (arg) { setModel(state.status.model, arg); } else { cycleEffort(); }
+      case "skills":
+        api("/api/skills").then(function (r) {
+          var s = r.skills || [];
+          if (!s.length) { addInfo("No skills discovered."); return; }
+          addInfo("Skills (" + s.length + "):\n" + s.map(function (x) { return "  • " + x.Name + (x.Description ? " — " + x.Description : ""); }).join("\n"));
+        }).catch(function (err) { addError(err.message); });
+        return true;
+      case "plugins":
+      case "ext":
+        api("/api/plugins").then(function (r) {
+          var p = r.plugins || [];
+          if (!p.length) { addInfo("No plugins installed."); return; }
+          addInfo("Plugins (" + p.length + "):\n" + p.map(function (x) { return "  • " + x.name + (x.description ? " — " + x.description : ""); }).join("\n"));
+        }).catch(function (err) { addError(err.message); });
+        return true;
+      case "undo":
+        api("/api/undo", { method: "POST" }).then(function (r) {
+          var files = r.restored || [];
+          addInfo(files.length ? ("Restored " + files.length + " file(s): " + files.join(", ")) : "Nothing to undo.");
+        }).catch(function (err) { addError(err.message); });
+        return true;
+      case "steer":
+        if (!arg) { addError("Usage: /steer <text>"); return true; }
+        api("/api/prompt", { method: "POST", body: { text: arg } })
+          .then(function () { addUser(arg, true); })
+          .catch(function (err) { addError(err.message); });
         return true;
       case "yolo":
         toggleYolo();
@@ -1612,6 +2081,10 @@
   // Global CLI ergonomics: typing anywhere focuses the composer; Ctrl+B / Ctrl+Y / Shift+Tab work like the TUI.
   document.addEventListener("keydown", function (ev) {
     if (!el.login.classList.contains("hidden")) { return; }
+    if (!el.modalBackdrop.classList.contains("hidden")) {
+      if (ev.key === "Escape") { ev.preventDefault(); closeModal(); }
+      return;
+    }
     if ((ev.ctrlKey || ev.metaKey) && ev.key.toLowerCase() === "b") {
       ev.preventDefault();
       toggleSidebar();

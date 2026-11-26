@@ -64,18 +64,24 @@ func TestFirstRunSetupDeepSeekAPIKey(t *testing.T) {
 		t.Fatal("expected error when submitting empty DeepSeek key")
 	}
 
-	// Paste key and submit.
-	m.handleModalKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("sk-deepseek-test"), Paste: true})
+	// Paste key (even with Windows CR/LF and bracketed-paste control sequences) and submit.
+	m.handleModalKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("\x1b[200~sk-deepseek-test\r\n\x1b[201~"), Paste: true})
 	m.handleModalKey(tea.KeyMsg{Type: tea.KeyEnter})
 
-	if m.activeModal != modalNone {
-		t.Fatalf("expected modal to close after setup, got %v", m.activeModal)
+	// Step 3 of 3: transitions seamlessly into the model selector for the chosen provider.
+	if m.activeModal != modalModel || !m.modal.fromProviderSetup {
+		t.Fatalf("expected transition to Step 3 model selector, got modal=%v fromSetup=%v", m.activeModal, m.modal.fromProviderSetup)
 	}
 	if m.needsSetup {
 		t.Fatal("expected needsSetup to be cleared")
 	}
 	if gotProvider != "deepseek" || gotKey != "sk-deepseek-test" || gotBaseURL != config.DefaultBaseURL || gotModel != config.DefaultModel {
 		t.Fatalf("configured = (%q, %q, %q, %q)", gotProvider, gotBaseURL, gotKey, gotModel)
+	}
+	// Confirm model in Step 3 closes the modal.
+	m.handleModalKey(tea.KeyMsg{Type: tea.KeyEnter})
+	if m.activeModal != modalNone {
+		t.Fatalf("expected modal to close after Step 3 model selection, got %v", m.activeModal)
 	}
 }
 
@@ -153,8 +159,8 @@ func TestFirstRunSetupLocalOllamaNoKeyRequired(t *testing.T) {
 	// Immediately press Enter without entering any API key.
 	m.handleModalKey(tea.KeyMsg{Type: tea.KeyEnter})
 
-	if m.activeModal != modalNone {
-		t.Fatalf("expected modal to close for local Ollama, err=%q", m.modal.providerSetup.errMsg)
+	if m.activeModal != modalModel || !m.modal.fromProviderSetup {
+		t.Fatalf("expected transition to Step 3 model selector for local Ollama, modal=%v err=%q", m.activeModal, m.modal.providerSetup.errMsg)
 	}
 	if gotProvider != "ollama" || gotKey != "local" || gotBaseURL != "http://localhost:11434/v1" || gotModel != "qwen2.5-coder:14b" {
 		t.Fatalf("configured = (%q, %q, %q, %q)", gotProvider, gotBaseURL, gotKey, gotModel)

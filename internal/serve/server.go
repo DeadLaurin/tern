@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/tern-agent/tern/internal/agent"
+	"github.com/tern-agent/tern/internal/checkpoint"
 	"github.com/tern-agent/tern/internal/config"
 	"github.com/tern-agent/tern/internal/permission"
 	"github.com/tern-agent/tern/internal/provider"
@@ -44,10 +45,12 @@ type Options struct {
 	Config  *config.Config
 	// Permissions is tern's permission evaluator. (There is no
 	// permission.Manager type in this codebase.)
-	Permissions *permission.Evaluator
-	Version         string
-	WorkDir         string
-	GlobalConfigDir string
+	Permissions         *permission.Evaluator
+	Checkpoints         *checkpoint.Store
+	OnConfigureProvider func(providerName, baseURL, apiKey, model string) error
+	Version             string
+	WorkDir             string
+	GlobalConfigDir     string
 	// Password enables password authentication when non-empty.
 	Password string
 	// AuthEnabled forces authentication on or off. When Password is set,
@@ -57,16 +60,18 @@ type Options struct {
 
 // Server is the HTTP handler set for `tern serve`.
 type Server struct {
-	Agent       *agent.Agent
-	Session     *session.Session
-	Store       *session.Store
-	Config      *config.Config
-	Permissions *permission.Evaluator
-	Version         string
-	WorkDir         string
-	GlobalConfigDir string
-	Password        string
-	AuthEnabled     bool
+	Agent               *agent.Agent
+	Session             *session.Session
+	Store               *session.Store
+	Config              *config.Config
+	Permissions         *permission.Evaluator
+	Checkpoints         *checkpoint.Store
+	OnConfigureProvider func(providerName, baseURL, apiKey, model string) error
+	Version             string
+	WorkDir             string
+	GlobalConfigDir     string
+	Password            string
+	AuthEnabled         bool
 
 	auth   *authManager
 	ctx    context.Context
@@ -128,16 +133,18 @@ func New(opts Options) *Server {
 	ctx, cancel := context.WithCancel(ctx)
 
 	s := &Server{
-		Agent:       opts.Agent,
-		Session:     opts.Session,
-		Store:       opts.Store,
-		Config:      opts.Config,
-		Permissions: opts.Permissions,
-		Version:         opts.Version,
-		WorkDir:         opts.WorkDir,
-		GlobalConfigDir: opts.GlobalConfigDir,
-		Password:        opts.Password,
-		AuthEnabled: opts.AuthEnabled || strings.TrimSpace(opts.Password) != "",
+		Agent:               opts.Agent,
+		Session:             opts.Session,
+		Store:               opts.Store,
+		Config:              opts.Config,
+		Permissions:         opts.Permissions,
+		Checkpoints:         opts.Checkpoints,
+		OnConfigureProvider: opts.OnConfigureProvider,
+		Version:             opts.Version,
+		WorkDir:             opts.WorkDir,
+		GlobalConfigDir:     opts.GlobalConfigDir,
+		Password:            opts.Password,
+		AuthEnabled:         opts.AuthEnabled || strings.TrimSpace(opts.Password) != "",
 
 		auth:      newAuthManager(opts.Password, opts.AuthEnabled || strings.TrimSpace(opts.Password) != ""),
 		ctx:       ctx,
@@ -211,8 +218,16 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/cancel", s.handleCancel)
 	mux.HandleFunc("/api/approve", s.handleApprove)
 	mux.HandleFunc("/api/model", s.handleModel)
+	mux.HandleFunc("/api/models", s.handleModels)
+	mux.HandleFunc("/api/providers", s.handleProviders)
+	mux.HandleFunc("/api/provider", s.handleSetProvider)
 	mux.HandleFunc("/api/permission", s.handlePermission)
 	mux.HandleFunc("/api/compact", s.handleCompact)
+	mux.HandleFunc("/api/changelog", s.handleChangelog)
+	mux.HandleFunc("/api/config", s.handleConfig)
+	mux.HandleFunc("/api/skills", s.handleSkills)
+	mux.HandleFunc("/api/plugins", s.handlePlugins)
+	mux.HandleFunc("/api/undo", s.handleUndo)
 	return s.authMiddleware(mux)
 }
 
@@ -254,6 +269,7 @@ func (s *Server) handleThemeCSS(w http.ResponseWriter, r *http.Request) {
 
 type statusResponse struct {
 	Version         string         `json:"version"`
+	Provider        string         `json:"provider"`
 	Model           string         `json:"model"`
 	Effort          string         `json:"effort,omitempty"`
 	WorkDir         string         `json:"work_dir"`
@@ -281,8 +297,13 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) status() statusResponse {
 	s.mu.Lock()
+	provName := "deepseek"
+	if s.Config != nil && strings.TrimSpace(s.Config.Provider) != "" {
+		provName = strings.ToLower(strings.TrimSpace(s.Config.Provider))
+	}
 	resp := statusResponse{
 		Version:       s.Version,
+		Provider:      provName,
 		Model:         s.model,
 		Effort:        s.effort,
 		WorkDir:       s.WorkDir,

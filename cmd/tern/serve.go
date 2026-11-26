@@ -242,18 +242,55 @@ func runServeCommand(args []string, o runOptions) int {
 		fmt.Fprintf(o.Err, "tern serve: warning: %s\n", warning)
 	}
 
+	onConfigureProvider := func(providerName, baseURL, apiKey, model string) error {
+		providerName = strings.ToLower(strings.TrimSpace(providerName))
+		baseURL = strings.TrimSpace(baseURL)
+		apiKey = config.SanitizeAPIKey(apiKey)
+		model = strings.TrimSpace(model)
+
+		if apiKey != "" && apiKey != "local" && !isLoopbackBaseURL(baseURL) {
+			if err := config.SaveAPIKeyForProvider(configDir, providerName, apiKey); err != nil {
+				return err
+			}
+		}
+		if err := config.SaveGlobalProviderSelection(configDir, providerName, baseURL, model); err != nil {
+			return err
+		}
+
+		cfg.Provider = providerName
+		if baseURL != "" {
+			cfg.BaseURL = baseURL
+		}
+		if model != "" {
+			cfg.Model = model
+		}
+		cfg.APIKey = apiKey
+
+		client := newProviderClient(cfg)
+		rt.Agent.Provider = client
+		if model != "" {
+			rt.Agent.SetModel(model)
+		}
+		if rt.Subagents != nil {
+			rt.Subagents.SetProvider(client, cfg.Model)
+		}
+		return nil
+	}
+
 	srv := serve.New(serve.Options{
-		Context:     ctx,
-		Agent:       rt.Agent,
-		Session:     rt.Session,
-		Store:       rt.SessionStore,
-		Config:      cfg,
-		Permissions: rt.Permissions,
-		Version:         o.Version,
-		WorkDir:         workDir,
-		GlobalConfigDir: configDir,
-		Password:        password,
-		AuthEnabled: authEnabled,
+		Context:             ctx,
+		Agent:               rt.Agent,
+		Session:             rt.Session,
+		Store:               rt.SessionStore,
+		Config:              cfg,
+		Permissions:         rt.Permissions,
+		Checkpoints:         rt.Checkpoints,
+		OnConfigureProvider: onConfigureProvider,
+		Version:             o.Version,
+		WorkDir:             workDir,
+		GlobalConfigDir:     configDir,
+		Password:            password,
+		AuthEnabled:         authEnabled,
 	})
 	defer srv.Close()
 

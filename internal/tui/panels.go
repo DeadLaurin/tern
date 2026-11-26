@@ -89,14 +89,15 @@ type modalState struct {
 	confirmDelete bool
 	notice        string
 
-	allModels      []modelChoice
-	models         []modelChoice
-	effort         string
-	freeOnly       bool
-	modelSort      string
-	modelsLoading  bool
-	modelsProvider string
-	modelsCacheKey string
+	allModels         []modelChoice
+	models            []modelChoice
+	effort            string
+	freeOnly          bool
+	modelSort         string
+	modelsLoading     bool
+	modelsProvider    string
+	modelsCacheKey    string
+	fromProviderSetup bool
 
 	sessions []modalSession
 
@@ -562,6 +563,9 @@ func (m *Model) handleModelModalKey(msg tea.KeyMsg) tea.Cmd {
 				m.modal.filterActive = true
 				m.dirty = true
 				return nil
+			case r == 'p' || r == 'P':
+				m.openProviderModal(false)
+				return nil
 			case r == 'r' || r == 'R':
 				if m.modal.modelsProvider != "" && m.modal.modelsProvider != "deepseek" {
 					m.cachedModelsKey = ""
@@ -631,9 +635,13 @@ func (m *Model) cycleReasoningEffort(delta int) {
 
 func (m *Model) applyModelModal() {
 	effort := m.modal.effort
+	fromSetup := m.modal.fromProviderSetup
 	if len(m.modal.models) > 0 {
 		selected := m.modal.models[m.modal.index]
 		m.applyModel(selected.name)
+		if fromSetup && m.opts.Config != nil && m.opts.GlobalConfigDir != "" {
+			_ = config.SaveGlobalProviderSelection(m.opts.GlobalConfigDir, m.opts.Config.Provider, m.opts.Config.BaseURL, selected.name)
+		}
 		m.closeModal()
 		m.applyReasoningEffort(effort)
 		m.addInfo(fmt.Sprintf("Model set to %s (%s).", selected.name, effort))
@@ -699,8 +707,14 @@ func (m *Model) modelModalView() string {
 	}
 	isRemote := provName != "deepseek"
 	title := "Model"
-	if isRemote {
+	if m.modal.fromProviderSetup {
+		title = "Choose Model · " + provName
+	} else if isRemote {
 		title = "Model · " + provName
+	}
+
+	if m.modal.fromProviderSetup {
+		b.WriteString(m.renderSetupStepper(3, provName) + "\n\n")
 	}
 
 	fmt.Fprintf(&b, "Current model: %s", current)
@@ -815,9 +829,9 @@ func (m *Model) modelModalView() string {
 	if m.modal.notice != "" {
 		b.WriteString("\n" + m.st.paint(m.st.amber, m.modal.notice))
 	}
-	footer := "↑/↓ select · ←/→ effort · 1-4 pick · enter apply · esc close"
+	footer := "↑/↓ select · p provider · ←/→ effort · 1-4 pick · enter apply · esc close"
 	if isRemote {
-		footer = "↑/↓ select · f free only · s sort · / search · r refresh · enter apply · esc close"
+		footer = "↑/↓ select · f free only · s sort · / search · p provider · r refresh · enter apply · esc close"
 	}
 	return m.modalFrame(title, strings.TrimRight(b.String(), "\n"), footer)
 }
