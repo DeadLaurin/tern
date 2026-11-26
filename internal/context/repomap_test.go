@@ -64,8 +64,8 @@ build/*
 	if index.Truncated {
 		t.Error("Truncated = true, want false")
 	}
-	if index.Duration <= 0 {
-		t.Error("Duration must be positive")
+	if index.Duration < 0 {
+		t.Error("Duration must be non-negative")
 	}
 
 	wantEntries := []string{

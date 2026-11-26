@@ -3,6 +3,7 @@ package ext
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -121,7 +122,7 @@ func TestScaffoldPluginCreatesWorkingPlugin(t *testing.T) {
 	if err != nil {
 		t.Fatalf("tool.sh missing: %v", err)
 	}
-	if info.Mode().Perm()&0o111 == 0 {
+	if runtime.GOOS != "windows" && info.Mode().Perm()&0o111 == 0 {
 		t.Fatalf("tool.sh is not executable: %v", info.Mode())
 	}
 	for _, name := range []string{PluginManifestFile, "README.md"} {
