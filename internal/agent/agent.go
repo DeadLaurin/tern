@@ -519,6 +519,9 @@ func (a *Agent) finishTurn(res *TurnResult, turn int, startUsage provider.Usage,
 	res.CacheHitRate = cacheHitRate(a.totalUsage)
 	res.ContextTokens = a.ContextTokens()
 	res.DurationMs = durationMillis(res.streamDuration)
+	if res.DurationMs == 0 && (res.Usage.TotalTokens > 0 || res.Usage.PromptTokens > 0 || res.Usage.CompletionTokens > 0) {
+		res.DurationMs = 1
+	}
 	res.TokensPerSec = tokensPerSec(res.textTokens, res.textDuration)
 
 	if err != nil {
