@@ -1,0 +1,311 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>tern — minimalist terminal coding agent</title>
+<meta name="description" content="A small, fast, cross-platform terminal coding agent for the DeepSeek API. Single static binary, instant startup, parallel sub-agents, and prefix-cache-first design.">
+<meta name="color-scheme" content="dark">
+<style>
+  :root {
+    --bg: #14171c;
+    --surface: #1b1f27;
+    --border: #2e3440;
+    --text: #e6eaf0;
+    --muted: #9aa3b2;
+    --dim: #6c7586;
+    --sage: #8fbc8f;
+    --amber: #d8b46a;
+    --mono: ui-monospace, "SF Mono", Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+    --sans: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  }
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0;
+    padding: 0;
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--sans);
+    line-height: 1.6;
+    -webkit-font-smoothing: antialiased;
+  }
+  a { color: var(--text); text-decoration-color: var(--dim); text-underline-offset: 3px; }
+  a:hover { text-decoration-color: var(--text); }
+  .wrap {
+    max-width: 740px;
+    margin: 0 auto;
+    padding: 64px 24px 80px;
+  }
+  .hero {
+    text-align: center;
+    margin-bottom: 52px;
+  }
+  .emblem {
+    display: inline-block;
+    text-align: left;
+    font-family: var(--mono);
+    font-size: 11px;
+    line-height: 1.15;
+    color: var(--muted);
+    margin: 0 0 22px;
+    user-select: none;
+  }
+  h1 {
+    font-family: var(--mono);
+    font-size: 2rem;
+    font-weight: 600;
+    letter-spacing: -0.03em;
+    margin: 0 0 12px;
+  }
+  .tagline {
+    color: var(--muted);
+    font-size: 1.05rem;
+    max-width: 52ch;
+    margin: 0 auto 24px;
+  }
+  .meta {
+    display: flex;
+    justify-content: center;
+    flex-wrap: wrap;
+    gap: 8px 18px;
+    font-family: var(--mono);
+    font-size: 0.78rem;
+    color: var(--dim);
+  }
+  .section {
+    margin-top: 44px;
+    padding-top: 32px;
+    border-top: 1px solid var(--border);
+  }
+  h2 {
+    font-family: var(--mono);
+    font-size: 0.8rem;
+    font-weight: 500;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--dim);
+    margin: 0 0 18px;
+  }
+  .tabs {
+    display: flex;
+    gap: 8px;
+    margin-bottom: 12px;
+  }
+  .tab {
+    font-family: var(--mono);
+    font-size: 0.8rem;
+    padding: 6px 12px;
+    border-radius: 6px;
+    border: 1px solid var(--border);
+    background: transparent;
+    color: var(--muted);
+    cursor: pointer;
+  }
+  .tab[aria-selected="true"] {
+    color: var(--text);
+    border-color: var(--muted);
+    background: var(--surface);
+  }
+  .cmd-box {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 12px 14px;
+  }
+  .cmd-box code {
+    flex: 1;
+    min-width: 0;
+    font-family: var(--mono);
+    font-size: 0.86rem;
+    color: var(--text);
+    overflow-x: auto;
+    white-space: nowrap;
+  }
+  .copy-btn {
+    flex: none;
+    font-family: var(--mono);
+    font-size: 0.75rem;
+    padding: 6px 12px;
+    border-radius: 6px;
+    border: 1px solid var(--border);
+    background: var(--bg);
+    color: var(--muted);
+    cursor: pointer;
+  }
+  .copy-btn:hover { color: var(--text); border-color: var(--muted); }
+  .copy-btn.copied { color: var(--sage); border-color: var(--sage); }
+  .hint {
+    margin: 10px 0 0;
+    font-family: var(--mono);
+    font-size: 0.78rem;
+    color: var(--dim);
+  }
+  .grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+    gap: 14px;
+  }
+  .card {
+    padding: 16px;
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    background: transparent;
+  }
+  .card h3 {
+    font-family: var(--mono);
+    font-size: 0.88rem;
+    font-weight: 600;
+    margin: 0 0 6px;
+    color: var(--text);
+  }
+  .card p {
+    margin: 0;
+    font-size: 0.9rem;
+    color: var(--muted);
+  }
+  .links {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 12px 24px;
+    font-family: var(--mono);
+    font-size: 0.85rem;
+  }
+  footer {
+    margin-top: 56px;
+    padding-top: 24px;
+    border-top: 1px solid var(--border);
+    display: flex;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 12px;
+    font-family: var(--mono);
+    font-size: 0.76rem;
+    color: var(--dim);
+  }
+</style>
+</head>
+<body>
+  <main class="wrap">
+    <header class="hero">
+      <pre class="emblem" aria-hidden="true">▄▄▄▄                                 ▄
+ ▀████▄                           ▄███
+   ▀██████▄                    ▄█████
+     ▀▀██████▄▄▄            ▄▄█████▀
+       ▀▀████████▄      ▄▄███████▀
+          ▀████████▄ ▄▄██████▀▀
+            ███████████████▀
+             ▀███████████████▄▄
+      ██████████████████████▀▀▀█▄▄
+       ██████▀▀▀▀████▀▀▀▀▀</pre>
+      <h1>tern</h1>
+      <p class="tagline">A small, fast, minimalist terminal coding agent for the DeepSeek API. Type <code>tern</code> in any repo and start working.</p>
+      <div class="meta">
+        <span>single static binary</span>
+        <span>·</span>
+        <span>~10ms startup</span>
+        <span>·</span>
+        <span>macOS · Linux · Windows</span>
+        <span>·</span>
+        <span>MIT</span>
+      </div>
+    </header>
+
+    <section class="section" id="install">
+      <h2>Install</h2>
+      <div class="tabs" role="tablist">
+        <button class="tab" role="tab" aria-selected="true" data-cmd="curl -fsSL https://deadlaurin.github.io/tern/install.sh | sh">macOS / Linux</button>
+        <button class="tab" role="tab" aria-selected="false" data-cmd="irm https://deadlaurin.github.io/tern/install.ps1 | iex">Windows (PowerShell)</button>
+        <button class="tab" role="tab" aria-selected="false" data-cmd="go install github.com/tern-agent/tern/cmd/tern@latest">Go</button>
+      </div>
+      <div class="cmd-box">
+        <code id="installCmd">curl -fsSL https://deadlaurin.github.io/tern/install.sh | sh</code>
+        <button class="copy-btn" id="copyBtn" type="button">Copy</button>
+      </div>
+      <p class="hint">SHA-256 verified from GitHub Releases · update anytime with <code>tern update</code> · remove with <code>tern uninstall</code></p>
+    </section>
+
+    <section class="section">
+      <h2>Built for daily flow</h2>
+      <div class="grid">
+        <div class="card">
+          <h3>Calm two-pane TUI</h3>
+          <p>Chat on the left, live inspector on the right with context/cache gauges, clickable sub-agent tabs, and right-click copy.</p>
+        </div>
+        <div class="card">
+          <h3>Parallel sub-agents</h3>
+          <p>Explore, research, review, or edit concurrently with per-path write locks and one-click thread peeking.</p>
+        </div>
+        <div class="card">
+          <h3>Prefix-cache first</h3>
+          <p>Append-only history, deterministic tool schemas, and proper DeepSeek V4 thinking passback keep cache hits high.</p>
+        </div>
+        <div class="card">
+          <h3>Steer &amp; queue</h3>
+          <p>Queue follow-ups while a turn runs, or press Ctrl+S to steer mid-flight without losing context.</p>
+        </div>
+        <div class="card">
+          <h3>Instant undo</h3>
+          <p>Shadow-copy file checkpoints before every edit turn — roll back with <code>/undo</code> or <code>tern undo</code>, no git required.</p>
+        </div>
+        <div class="card">
+          <h3>Extensible &amp; local</h3>
+          <p>Skills, hooks, MCP servers (stdio &amp; HTTP), folder extensions, plus <code>--local</code> for offline Ollama endpoints.</p>
+        </div>
+      </div>
+    </section>
+
+    <section class="section">
+      <h2>Links</h2>
+      <div class="links">
+        <a href="https://github.com/DeadLaurin/tern">GitHub Repository</a>
+        <a href="https://github.com/DeadLaurin/tern/releases">Releases &amp; Checksums</a>
+        <a href="https://deadlaurin.github.io/tern/install.sh">install.sh</a>
+        <a href="https://deadlaurin.github.io/tern/install.ps1">install.ps1</a>
+      </div>
+    </section>
+
+    <footer>
+      <span>tern · MIT License</span>
+      <span>github.com/DeadLaurin/tern</span>
+    </footer>
+  </main>
+
+  <script>
+    (function () {
+      var tabs = document.querySelectorAll('.tab');
+      var code = document.getElementById('installCmd');
+      var copyBtn = document.getElementById('copyBtn');
+      var resetTimer = null;
+
+      tabs.forEach(function (tab) {
+        tab.addEventListener('click', function () {
+          tabs.forEach(function (t) { t.setAttribute('aria-selected', 'false'); });
+          tab.setAttribute('aria-selected', 'true');
+          code.textContent = tab.getAttribute('data-cmd');
+          copyBtn.textContent = 'Copy';
+          copyBtn.classList.remove('copied');
+        });
+      });
+
+      copyBtn.addEventListener('click', function () {
+        var text = code.textContent;
+        var done = function () {
+          copyBtn.textContent = 'Copied';
+          copyBtn.classList.add('copied');
+          clearTimeout(resetTimer);
+          resetTimer = setTimeout(function () {
+            copyBtn.textContent = 'Copy';
+            copyBtn.classList.remove('copied');
+          }, 1600);
+        };
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+          navigator.clipboard.writeText(text).then(done);
+        }
+      });
+    })();
+  </script>
+</body>
+</html>
