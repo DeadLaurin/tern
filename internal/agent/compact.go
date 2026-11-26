@@ -231,9 +231,10 @@ func (a *Agent) compactInternal(ctx context.Context, instructions, reason string
 		CostUSD:            cost,
 	}
 	a.emit(Event{
-		Type:   EventCompact,
-		Turn:   a.turn,
-		Reason: reason,
+		Type:          EventCompact,
+		Turn:          a.turn,
+		Reason:        reason,
+		ContextTokens: a.ContextTokens(),
 		Compact: &CompactInfo{
 			Reason:             reason,
 			SummaryChars:       len(text),

@@ -66,10 +66,11 @@ type TurnResult struct {
 	ToolCalls    int            `json:"tool_calls"`
 	Usage        provider.Usage `json:"usage"`
 	CostUSD      float64        `json:"cost_usd"`
-	TotalUsage   provider.Usage `json:"total_usage"`
-	TotalCostUSD float64        `json:"total_cost_usd"`
-	CacheHitRate float64        `json:"cache_hit_rate"`
-	Compacted    bool           `json:"compacted,omitempty"`
+	TotalUsage    provider.Usage `json:"total_usage"`
+	TotalCostUSD  float64        `json:"total_cost_usd"`
+	CacheHitRate  float64        `json:"cache_hit_rate"`
+	ContextTokens int            `json:"context_tokens,omitempty"`
+	Compacted     bool           `json:"compacted,omitempty"`
 	StopReason   StopReason     `json:"stop_reason"`
 	DurationMs   int64          `json:"duration_ms,omitempty"`
 	TokensPerSec float64        `json:"tokens_per_sec,omitempty"`
@@ -516,6 +517,7 @@ func (a *Agent) finishTurn(res *TurnResult, turn int, startUsage provider.Usage,
 	res.TotalUsage = a.totalUsage
 	res.TotalCostUSD = a.totalCost
 	res.CacheHitRate = cacheHitRate(a.totalUsage)
+	res.ContextTokens = a.ContextTokens()
 	res.DurationMs = durationMillis(res.streamDuration)
 	res.TokensPerSec = tokensPerSec(res.textTokens, res.textDuration)
 
@@ -528,10 +530,11 @@ func (a *Agent) finishTurn(res *TurnResult, turn int, startUsage provider.Usage,
 		Turn:         turn,
 		Reason:       string(reason),
 		Usage:        &usage,
-		CostUSD:      res.CostUSD,
-		TotalCostUSD: res.TotalCostUSD,
-		CacheHitRate: res.CacheHitRate,
-		DurationMs:   res.DurationMs,
+		CostUSD:       res.CostUSD,
+		TotalCostUSD:  res.TotalCostUSD,
+		CacheHitRate:  res.CacheHitRate,
+		ContextTokens: res.ContextTokens,
+		DurationMs:    res.DurationMs,
 		TokensPerSec: res.TokensPerSec,
 		Message:      res.Text,
 	})
@@ -787,10 +790,11 @@ func (a *Agent) recordUsage(req provider.ChatRequest, u provider.Usage, turn, st
 		Turn:         turn,
 		Step:         step,
 		Usage:        &usage,
-		CostUSD:      cost,
-		TotalCostUSD: a.totalCost,
-		CacheHitRate: cacheHitRate(a.totalUsage),
-		DurationMs:   durationMillis(elapsed),
+		CostUSD:       cost,
+		TotalCostUSD:  a.totalCost,
+		CacheHitRate:  cacheHitRate(a.totalUsage),
+		ContextTokens: a.ContextTokens(),
+		DurationMs:    durationMillis(elapsed),
 		TokensPerSec: speed,
 	})
 }
@@ -1219,6 +1223,17 @@ func (a *Agent) shouldAutoCompact() bool {
 		tokens = estimated
 	}
 	return tokens > 0 && float64(tokens) >= threshold*float64(window)
+}
+
+// ContextTokens returns the parent agent's current single-request context size
+// in tokens (latest prompt size when known, otherwise estimated from parent
+// history). Sub-agent token usage is never included here because each sub-agent
+// has its own independent context window.
+func (a *Agent) ContextTokens() int {
+	if a.lastPromptTokens > 0 {
+		return a.lastPromptTokens
+	}
+	return a.estimateTokens()
 }
 
 func (a *Agent) estimateTokens() int {

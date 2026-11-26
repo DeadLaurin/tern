@@ -53,11 +53,12 @@ type Event struct {
 	DurationMs int64 `json:"duration_ms,omitempty"`
 
 	// Usage and accounting fields.
-	Usage        *provider.Usage `json:"usage,omitempty"`
-	CostUSD      float64         `json:"cost_usd,omitempty"`
-	TotalCostUSD float64         `json:"total_cost_usd,omitempty"`
-	CacheHitRate float64         `json:"cache_hit_rate,omitempty"`
-	TokensPerSec float64         `json:"tokens_per_sec,omitempty"`
+	Usage         *provider.Usage `json:"usage,omitempty"`
+	CostUSD       float64         `json:"cost_usd,omitempty"`
+	TotalCostUSD  float64         `json:"total_cost_usd,omitempty"`
+	CacheHitRate  float64         `json:"cache_hit_rate,omitempty"`
+	ContextTokens int             `json:"context_tokens,omitempty"`
+	TokensPerSec  float64         `json:"tokens_per_sec,omitempty"`
 
 	// Cache verification fields (cache_debug).
 	PrefixHash      string `json:"prefix_hash,omitempty"`
