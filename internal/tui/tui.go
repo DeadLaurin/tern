@@ -105,6 +105,7 @@ func New(opts Options) *Model {
 	opts = normalizeOptions(opts)
 	m := &Model{
 		opts:         opts,
+		theme:        "dark",
 		st:           newStyles(noColor(opts.NoColor)),
 		ed:           newEditor(),
 		bus:          newEventBus(),

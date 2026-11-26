@@ -24,6 +24,7 @@ const (
 	actionApprovalAllow
 	actionApprovalAllowAll
 	actionApprovalDeny
+	actionApprovalDiffToggle
 	actionAskOption
 	actionAgentsPanelRow
 	actionSidebarAgent
@@ -248,6 +249,8 @@ func (m *Model) handleOverlayMouse(msg tea.MouseMsg) bool {
 			m.resolveApproval(true)
 		case actionApprovalDeny:
 			m.resolveApproval(false)
+		case actionApprovalDiffToggle:
+			m.toggleApprovalDiff()
 		case actionAskOption:
 			if m.pendingAsk != nil && hit.index >= 0 && hit.index < len(m.pendingAsk.options) {
 				m.pendingAsk.selected = hit.index

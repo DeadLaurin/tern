@@ -1511,6 +1511,7 @@ func (m *Model) helpItems() []helpItem {
 		{name: "effort", usage: "/effort <none|low|high|max>", detail: "set reasoning effort immediately", takesArgs: true},
 		{name: "thinking", usage: "/thinking <none|low|high|max>", detail: "alias for /effort", takesArgs: true},
 		{name: "plan", usage: "/plan", detail: "toggle read-only plan mode"},
+		{name: "theme", usage: "/theme [dark|light]", detail: "switch between the dark and light palettes, or toggle when omitted"},
 		{name: "stats", usage: "/stats", detail: "visual usage and activity monitor"},
 		{name: "sessions", usage: "/sessions [query]", detail: "browse, resume, fork, rename or delete sessions"},
 		{name: "agents", usage: "/agents", detail: "inspect or cancel sub-agents"},

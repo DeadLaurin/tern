@@ -2,6 +2,7 @@ package tui
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -2209,4 +2210,168 @@ func TestLeftClickApprovalButtonsAndHelpRow(t *testing.T) {
 			t.Fatalf("help click selected row %d, want %d", m.modal.index, target)
 		}
 	})
+}
+
+func longApprovalDiff() string {
+	var b strings.Builder
+	b.WriteString("--- a/internal/parser.go\n")
+	b.WriteString("+++ b/internal/parser.go\n")
+	b.WriteString("@@ -1,3 +1,20 @@\n")
+	for i := 0; i < 20; i++ {
+		fmt.Fprintf(&b, "+added line %02d\n", i)
+	}
+	for i := 0; i < 4; i++ {
+		fmt.Fprintf(&b, "-removed line %02d\n", i)
+	}
+	return b.String()
+}
+
+func TestApprovalDiffStatsAndExpansion(t *testing.T) {
+	m := newTestModel(t, Options{})
+	response := make(chan approvalResult, 1)
+	m.Update(approvalRequestMsg{request: &approvalState{
+		parent:   &agent.ApprovalRequest{ToolName: "edit", Path: "parser.go", Diff: longApprovalDiff()},
+		response: response,
+	}})
+
+	view := m.View()
+	for _, want := range []string{"+20", "-4", "[d] Full diff", "more diff lines"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("compact approval view missing %q:\n%s", want, view)
+		}
+	}
+	if strings.Contains(view, "added line 19") {
+		t.Fatalf("compact preview should hide far diff lines:\n%s", view)
+	}
+
+	pressRune(t, m, "d")
+	if m.pendingApproval == nil || !m.pendingApproval.diffExpanded {
+		t.Fatal("'d' did not expand the diff")
+	}
+	view = m.View()
+	for _, want := range []string{"added line 19", "-removed line 03", "[d] Compact diff"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("expanded approval view missing %q:\n%s", want, view)
+		}
+	}
+
+	pressRune(t, m, "d")
+	if m.pendingApproval.diffExpanded {
+		t.Fatal("second 'd' did not collapse the diff")
+	}
+
+	// Clicking the [d] button must toggle exactly like the keyboard shortcut.
+	m.View()
+	found := false
+	for _, hit := range m.overlayHits {
+		if hit.action != actionApprovalDiffToggle {
+			continue
+		}
+		found = true
+		clickAt(m, m.overlayLeft+hit.start, m.overlayTop+hit.line, tea.MouseButtonLeft)
+		break
+	}
+	if !found {
+		t.Fatalf("diff toggle hit was not recorded: %+v", m.overlayHits)
+	}
+	if !m.pendingApproval.diffExpanded {
+		t.Fatal("clicking [d] Full diff did not expand the diff")
+	}
+	if m.pendingApproval == nil {
+		t.Fatal("diff toggle unexpectedly resolved the approval")
+	}
+}
+
+func TestApprovalDiffStatsAbsentWithoutDiff(t *testing.T) {
+	m := newTestModel(t, Options{})
+	m.Update(approvalRequestMsg{request: &approvalState{
+		parent:   &agent.ApprovalRequest{ToolName: "bash", Command: "go test ./..."},
+		response: make(chan approvalResult, 1),
+	}})
+	view := m.View()
+	if strings.Contains(view, "[d]") {
+		t.Fatalf("approval without diff should not show a diff toggle:\n%s", view)
+	}
+	if strings.Contains(view, "+0") || strings.Contains(view, "-0") {
+		t.Fatalf("approval without diff should not show stats:\n%s", view)
+	}
+}
+
+func TestThemeCommandSwitchesPalettes(t *testing.T) {
+	m := newTestModel(t, Options{})
+	if m.theme != "dark" {
+		t.Fatalf("default theme = %q, want dark", m.theme)
+	}
+
+	submitText(t, m, "/theme light")
+	if m.theme != "light" {
+		t.Fatalf("theme after /theme light = %q", m.theme)
+	}
+	if !m.st.plain {
+		t.Fatal("NO_COLOR model should keep plain styles after switching theme")
+	}
+	if view := m.View(); strings.Contains(view, "\x1b[") {
+		t.Fatalf("light theme emitted ANSI under NO_COLOR:\n%q", view)
+	}
+
+	submitText(t, m, "/theme dark")
+	if m.theme != "dark" {
+		t.Fatalf("theme after /theme dark = %q", m.theme)
+	}
+
+	// No argument toggles in both directions.
+	submitText(t, m, "/theme")
+	if m.theme != "light" {
+		t.Fatalf("theme after bare /theme = %q, want light", m.theme)
+	}
+	submitText(t, m, "/theme")
+	if m.theme != "dark" {
+		t.Fatalf("theme after second bare /theme = %q, want dark", m.theme)
+	}
+
+	// Invalid arguments leave the active palette untouched.
+	submitText(t, m, "/theme neon")
+	if m.theme != "dark" {
+		t.Fatalf("invalid /theme changed the theme to %q", m.theme)
+	}
+}
+
+func TestThemePalettesAreSurfaceFree(t *testing.T) {
+	light := paletteForTheme("light")
+	if light.accent != "#16150F" || light.muted != "#4C4940" || light.subtle != "#767063" ||
+		light.border != "#B8B2A6" || light.sage != "#2D6A4F" || light.amber != "#9A6700" || light.coral != "#B42318" {
+		t.Fatalf("unexpected light palette: %+v", light)
+	}
+	for _, theme := range []string{"dark", "light"} {
+		st := newStylesForTheme(false, theme)
+		for name, rendered := range map[string]string{
+			"surface":     st.paint(st.surface, "x"),
+			"panel":       st.paint(st.panel, "x"),
+			"modalBorder": st.paint(st.modalBorder, "x"),
+			"selected":    st.paint(st.selected, "x"),
+		} {
+			if strings.Contains(rendered, "48;") || strings.Contains(rendered, "48:") {
+				t.Fatalf("%s theme %s painted a background: %q", theme, name, rendered)
+			}
+		}
+	}
+}
+
+func TestThemeHonorsNoColor(t *testing.T) {
+	t.Setenv("NO_COLOR", "1")
+	for _, theme := range []string{"dark", "light"} {
+		st := newStylesForTheme(noColor(false), theme)
+		if !st.plain {
+			t.Fatalf("%s theme ignored NO_COLOR", theme)
+		}
+		for _, out := range []string{
+			st.paint(st.bold, "text"),
+			st.paint(st.error, "boom"),
+			st.paint(st.modalBorder, "frame"),
+		} {
+			if strings.Contains(out, "\x1b[") {
+				t.Fatalf("%s theme emitted ANSI under NO_COLOR: %q", theme, out)
+			}
+		}
+	}
 }

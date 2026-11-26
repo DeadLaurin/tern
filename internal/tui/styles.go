@@ -36,6 +36,67 @@ const (
 	colorBorder  = "#434B59" // subtle neutral hairline border
 )
 
+// The light palette is Swiss-paper inspired: dense ink on paper, sage for
+// additions, amber for tools, and rose for errors. It never paints a surface
+// either, so the terminal background stays even and the contrast comes purely
+// from foreground ink.
+const (
+	lightAccent = "#16150F" // primary ink
+	lightTeal   = "#4C4940" // secondary ink
+	lightSage   = "#2D6A4F" // sage add / success
+	lightAmber  = "#9A6700" // amber tool / warning
+	lightCoral  = "#B42318" // rose error / YOLO
+	lightSlate  = "#4C4940" // muted reasoning rail
+	lightText   = "#16150F" // primary text
+	lightMuted  = "#4C4940" // secondary text
+	lightSubtle = "#767063" // dim metadata
+	lightBorder = "#B8B2A6" // hairline border
+)
+
+// palette holds the semantic foreground colors for one theme. Empty values are
+// transparent and always inherit the terminal background.
+type palette struct {
+	accent string
+	teal   string
+	sage   string
+	amber  string
+	coral  string
+	slate  string
+	text   string
+	muted  string
+	subtle string
+	border string
+}
+
+func paletteForTheme(theme string) palette {
+	if strings.EqualFold(strings.TrimSpace(theme), "light") {
+		return palette{
+			accent: lightAccent,
+			teal:   lightTeal,
+			sage:   lightSage,
+			amber:  lightAmber,
+			coral:  lightCoral,
+			slate:  lightSlate,
+			text:   lightText,
+			muted:  lightMuted,
+			subtle: lightSubtle,
+			border: lightBorder,
+		}
+	}
+	return palette{
+		accent: colorAccent,
+		teal:   colorTeal,
+		sage:   colorSage,
+		amber:  colorAmber,
+		coral:  colorCoral,
+		slate:  colorSlate,
+		text:   colorText,
+		muted:  colorMuted,
+		subtle: colorSubtle,
+		border: colorBorder,
+	}
+}
+
 // styles bundles every style used by the TUI. When plain is true all helpers
 // return unstyled text, which keeps redirected output and NO_COLOR sessions
 // free of ANSI escape sequences.
@@ -91,60 +152,71 @@ type styles struct {
 	modalTitle  lipgloss.Style
 }
 
+// newStyles keeps every existing caller on the calm neutral dark palette.
 func newStyles(plain bool) styles {
+	return newStylesForTheme(plain, "dark")
+}
+
+// newStylesForTheme builds the style bundle for "dark" or "light". Both
+// palettes only ever set foreground colors, so the terminal background shows
+// through evenly and neither theme produces patchy filled rectangles.
+func newStylesForTheme(plain bool, theme string) styles {
 	s := styles{plain: plain}
 	if plain {
 		return s
 	}
-	s.user = lipgloss.NewStyle().Foreground(lipgloss.Color(colorText))
-	s.assistant = lipgloss.NewStyle().Foreground(lipgloss.Color(colorText))
-	s.reasoning = lipgloss.NewStyle().Foreground(lipgloss.Color(colorSlate)).Italic(true)
-	s.tool = lipgloss.NewStyle().Foreground(lipgloss.Color(colorSubtle))
-	s.toolName = lipgloss.NewStyle().Foreground(lipgloss.Color(colorAmber))
-	s.error = lipgloss.NewStyle().Foreground(lipgloss.Color(colorCoral))
-	s.success = lipgloss.NewStyle().Foreground(lipgloss.Color(colorSage))
-	s.warn = lipgloss.NewStyle().Foreground(lipgloss.Color(colorAmber))
-	s.info = lipgloss.NewStyle().Foreground(lipgloss.Color(colorTeal))
-	s.dim = lipgloss.NewStyle().Foreground(lipgloss.Color(colorSubtle))
-	s.bold = lipgloss.NewStyle().Foreground(lipgloss.Color(colorText)).Bold(true)
+	p := paletteForTheme(theme)
+	color := func(hex string) lipgloss.Color { return lipgloss.Color(hex) }
+
+	s.user = lipgloss.NewStyle().Foreground(color(p.text))
+	s.assistant = lipgloss.NewStyle().Foreground(color(p.text))
+	s.reasoning = lipgloss.NewStyle().Foreground(color(p.slate)).Italic(true)
+	s.tool = lipgloss.NewStyle().Foreground(color(p.subtle))
+	s.toolName = lipgloss.NewStyle().Foreground(color(p.amber))
+	s.error = lipgloss.NewStyle().Foreground(color(p.coral))
+	s.success = lipgloss.NewStyle().Foreground(color(p.sage))
+	s.warn = lipgloss.NewStyle().Foreground(color(p.amber))
+	s.info = lipgloss.NewStyle().Foreground(color(p.teal))
+	s.dim = lipgloss.NewStyle().Foreground(color(p.subtle))
+	s.bold = lipgloss.NewStyle().Foreground(color(p.text)).Bold(true)
 	s.italic = lipgloss.NewStyle().Italic(true)
-	s.heading = lipgloss.NewStyle().Foreground(lipgloss.Color(colorAccent)).Bold(true)
-	s.quote = lipgloss.NewStyle().Foreground(lipgloss.Color(colorMuted))
-	s.list = lipgloss.NewStyle().Foreground(lipgloss.Color(colorTeal))
-	s.inline = lipgloss.NewStyle().Foreground(lipgloss.Color(colorAmber))
-	s.codeBlock = lipgloss.NewStyle().Foreground(lipgloss.Color(colorMuted))
-	s.keyword = lipgloss.NewStyle().Foreground(lipgloss.Color(colorAccent)).Bold(true)
-	s.str = lipgloss.NewStyle().Foreground(lipgloss.Color(colorSage))
-	s.comment = lipgloss.NewStyle().Foreground(lipgloss.Color(colorSubtle)).Italic(true)
-	s.number = lipgloss.NewStyle().Foreground(lipgloss.Color(colorAmber))
+	s.heading = lipgloss.NewStyle().Foreground(color(p.accent)).Bold(true)
+	s.quote = lipgloss.NewStyle().Foreground(color(p.muted))
+	s.list = lipgloss.NewStyle().Foreground(color(p.teal))
+	s.inline = lipgloss.NewStyle().Foreground(color(p.amber))
+	s.codeBlock = lipgloss.NewStyle().Foreground(color(p.muted))
+	s.keyword = lipgloss.NewStyle().Foreground(color(p.accent)).Bold(true)
+	s.str = lipgloss.NewStyle().Foreground(color(p.sage))
+	s.comment = lipgloss.NewStyle().Foreground(color(p.subtle)).Italic(true)
+	s.number = lipgloss.NewStyle().Foreground(color(p.amber))
 
-	s.statusBar = lipgloss.NewStyle().Foreground(lipgloss.Color(colorMuted))
-	s.statusKey = lipgloss.NewStyle().Foreground(lipgloss.Color(colorSubtle))
-	s.statusValue = lipgloss.NewStyle().Foreground(lipgloss.Color(colorMuted))
-	s.statusAccent = lipgloss.NewStyle().Foreground(lipgloss.Color(colorAccent)).Bold(true)
-	s.statusAlert = lipgloss.NewStyle().Foreground(lipgloss.Color(colorCoral)).Bold(true)
-	s.prompt = lipgloss.NewStyle().Foreground(lipgloss.Color(colorAccent)).Bold(true)
+	s.statusBar = lipgloss.NewStyle().Foreground(color(p.muted))
+	s.statusKey = lipgloss.NewStyle().Foreground(color(p.subtle))
+	s.statusValue = lipgloss.NewStyle().Foreground(color(p.muted))
+	s.statusAccent = lipgloss.NewStyle().Foreground(color(p.accent)).Bold(true)
+	s.statusAlert = lipgloss.NewStyle().Foreground(color(p.coral)).Bold(true)
+	s.prompt = lipgloss.NewStyle().Foreground(color(p.accent)).Bold(true)
 	s.cursor = lipgloss.NewStyle().Reverse(true)
-	s.placeholder = lipgloss.NewStyle().Foreground(lipgloss.Color(colorSubtle))
-	s.border = lipgloss.NewStyle().Foreground(lipgloss.Color(colorBorder))
-	s.selected = lipgloss.NewStyle().Foreground(lipgloss.Color(colorAccent)).Bold(true)
-	s.diffAdd = lipgloss.NewStyle().Foreground(lipgloss.Color(colorSage))
-	s.diffDel = lipgloss.NewStyle().Foreground(lipgloss.Color(colorCoral))
-	s.diffHunk = lipgloss.NewStyle().Foreground(lipgloss.Color(colorTeal))
+	s.placeholder = lipgloss.NewStyle().Foreground(color(p.subtle))
+	s.border = lipgloss.NewStyle().Foreground(color(p.border))
+	s.selected = lipgloss.NewStyle().Foreground(color(p.accent)).Bold(true)
+	s.diffAdd = lipgloss.NewStyle().Foreground(color(p.sage))
+	s.diffDel = lipgloss.NewStyle().Foreground(color(p.coral))
+	s.diffHunk = lipgloss.NewStyle().Foreground(color(p.teal))
 
-	s.accent = lipgloss.NewStyle().Foreground(lipgloss.Color(colorAccent))
-	s.teal = lipgloss.NewStyle().Foreground(lipgloss.Color(colorTeal))
-	s.sage = lipgloss.NewStyle().Foreground(lipgloss.Color(colorSage))
-	s.amber = lipgloss.NewStyle().Foreground(lipgloss.Color(colorAmber))
-	s.coral = lipgloss.NewStyle().Foreground(lipgloss.Color(colorCoral))
-	s.userAccent = lipgloss.NewStyle().Foreground(lipgloss.Color(colorMuted))
-	s.surface = lipgloss.NewStyle().Foreground(lipgloss.Color(colorText))
-	s.panel = lipgloss.NewStyle().Foreground(lipgloss.Color(colorText))
+	s.accent = lipgloss.NewStyle().Foreground(color(p.accent))
+	s.teal = lipgloss.NewStyle().Foreground(color(p.teal))
+	s.sage = lipgloss.NewStyle().Foreground(color(p.sage))
+	s.amber = lipgloss.NewStyle().Foreground(color(p.amber))
+	s.coral = lipgloss.NewStyle().Foreground(color(p.coral))
+	s.userAccent = lipgloss.NewStyle().Foreground(color(p.muted))
+	s.surface = lipgloss.NewStyle().Foreground(color(p.text))
+	s.panel = lipgloss.NewStyle().Foreground(color(p.text))
 	s.modalBorder = lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
-		BorderForeground(lipgloss.Color(colorBorder)).
+		BorderForeground(color(p.border)).
 		Padding(0, 1)
-	s.modalTitle = lipgloss.NewStyle().Foreground(lipgloss.Color(colorAccent)).Bold(true)
+	s.modalTitle = lipgloss.NewStyle().Foreground(color(p.accent)).Bold(true)
 	return s
 }
 

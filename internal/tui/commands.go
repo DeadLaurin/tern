@@ -43,6 +43,7 @@ var builtinCommandNames = []string{
 	"skills",
 	"stats",
 	"steer",
+	"theme",
 	"thinking",
 	"undo",
 }
@@ -66,6 +67,9 @@ func (m *Model) handleSlash(line string, attachments []provider.ContentPart) tea
 
 	case "effort", "thinking":
 		return m.cmdEffort(args)
+
+	case "theme":
+		return m.cmdTheme(args)
 
 	case "plan":
 		return m.cmdPlan()
@@ -215,6 +219,7 @@ func (m *Model) helpText() string {
 		"/model [name]":            "open the model selector or switch directly",
 		"/stats":                   "usage and activity log across sessions",
 		"/plan":                    "toggle read-only plan mode",
+		"/theme [dark|light]":      "switch the palette, or toggle when omitted",
 		"/yolo":                    "toggle dangerous allow-all mode (Ctrl+Y)",
 		"/compact [text]":          "summarize older context (optional instructions)",
 		"/steer <text>":            "steer the running turn, or start one when idle (Ctrl+S)",
@@ -340,6 +345,30 @@ func (m *Model) cmdEffort(args string) tea.Cmd {
 	m.applyReasoningEffort(level)
 	m.statusMsg = "Reasoning effort: " + level
 	m.addInfo("Reasoning effort set to " + level + ".")
+	return nil
+}
+
+// cmdTheme switches between the calm neutral dark palette and the crisp
+// paper-toned light palette. With no argument it toggles the current theme.
+func (m *Model) cmdTheme(args string) tea.Cmd {
+	theme := strings.ToLower(strings.TrimSpace(args))
+	switch theme {
+	case "":
+		if m.theme == "light" {
+			theme = "dark"
+		} else {
+			theme = "light"
+		}
+	case "dark", "light":
+	default:
+		m.addError("Usage: /theme [dark|light]")
+		return nil
+	}
+	m.theme = theme
+	m.st = newStylesForTheme(noColor(m.opts.NoColor), theme)
+	m.dirty = true
+	m.statusMsg = "Theme: " + theme
+	m.addInfo("Theme set to " + theme + ".")
 	return nil
 }
 

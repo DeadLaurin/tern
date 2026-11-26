@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 
 	"github.com/tern-agent/tern/internal/agent"
 	"github.com/tern-agent/tern/internal/subagent"
@@ -221,6 +222,9 @@ func (m *Model) handleApprovalKey(msg tea.KeyMsg) tea.Cmd {
 			m.turnAutoApprove = true
 			m.resolveApproval(true)
 			return nil
+		case "d":
+			m.toggleApprovalDiff()
+			return nil
 		}
 		return nil
 	case tea.KeyEnter:
@@ -235,6 +239,60 @@ func (m *Model) handleApprovalKey(msg tea.KeyMsg) tea.Cmd {
 
 // enqueueApproval keeps concurrent approval requests in a strict FIFO queue.
 // A request can never overwrite the one currently on screen.
+// toggleApprovalDiff flips the pending approval card between its compact and
+// expanded diff previews.
+func (m *Model) toggleApprovalDiff() {
+	state := m.pendingApproval
+	if state == nil {
+		return
+	}
+	state.diffExpanded = !state.diffExpanded
+	if state.diffExpanded {
+		m.statusMsg = "Full diff"
+	} else {
+		m.statusMsg = "Compact diff"
+	}
+	m.dirty = true
+}
+
+// approvalDiff returns the diff payload for whichever agent asked, already
+// trimmed. It is empty when the request carries no diff.
+func approvalDiff(state *approvalState) string {
+	if state == nil {
+		return ""
+	}
+	if state.sub != nil {
+		return strings.TrimSpace(state.sub.DiffPreview)
+	}
+	if state.parent != nil {
+		return strings.TrimSpace(state.parent.Diff)
+	}
+	return ""
+}
+
+// diffLineCount returns the number of physical lines in a diff payload.
+func diffLineCount(diff string) int {
+	if strings.TrimSpace(diff) == "" {
+		return 0
+	}
+	return len(strings.Split(strings.ReplaceAll(diff, "\r\n", "\n"), "\n"))
+}
+
+// diffStats counts added and removed lines, ignoring the +++/--- file headers.
+func diffStats(diff string) (added, removed int) {
+	for _, line := range strings.Split(strings.ReplaceAll(diff, "\r\n", "\n"), "\n") {
+		switch {
+		case strings.HasPrefix(line, "+++"), strings.HasPrefix(line, "---"):
+			continue
+		case strings.HasPrefix(line, "+"):
+			added++
+		case strings.HasPrefix(line, "-"):
+			removed++
+		}
+	}
+	return added, removed
+}
+
 func (m *Model) enqueueApproval(state *approvalState) {
 	if state == nil {
 		return
@@ -374,6 +432,9 @@ func (m *Model) approvalView() string {
 	if state == nil {
 		return ""
 	}
+	diff := approvalDiff(state)
+	added, removed := diffStats(diff)
+
 	title := "Permission Required"
 	total := 1 + len(m.approvalQueue)
 	if total > 1 {
@@ -381,6 +442,12 @@ func (m *Model) approvalView() string {
 	}
 	var b strings.Builder
 	b.WriteString(m.st.paint(m.st.warn, title))
+	if strings.TrimSpace(diff) != "" {
+		b.WriteString(m.st.paint(m.st.dim, "  "))
+		b.WriteString(m.st.paint(m.st.success, fmt.Sprintf("+%d", added)))
+		b.WriteString(m.st.paint(m.st.dim, " "))
+		b.WriteString(m.st.paint(m.st.error, fmt.Sprintf("-%d", removed)))
+	}
 	b.WriteString("\n\n")
 
 	if state.sub != nil {
@@ -396,13 +463,6 @@ func (m *Model) approvalView() string {
 		if strings.TrimSpace(req.Reason) != "" {
 			fmt.Fprintf(&b, "Reason: %s\n", req.Reason)
 		}
-		if diff := strings.TrimSpace(req.DiffPreview); diff != "" {
-			b.WriteString("\n")
-			b.WriteString(m.st.paint(m.st.bold, "Diff"))
-			b.WriteString("\n")
-			b.WriteString(m.diffView(diff))
-			b.WriteString("\n")
-		}
 	} else if state.parent != nil {
 		req := state.parent
 		fmt.Fprintf(&b, "Agent: tern (main)\n")
@@ -416,43 +476,68 @@ func (m *Model) approvalView() string {
 		if strings.TrimSpace(req.Reason) != "" {
 			fmt.Fprintf(&b, "Reason: %s\n", req.Reason)
 		}
-		if diff := strings.TrimSpace(req.Diff); diff != "" {
-			b.WriteString("\n")
-			b.WriteString(m.st.paint(m.st.bold, "Diff"))
-			b.WriteString("\n")
-			b.WriteString(m.diffView(diff))
-			b.WriteString("\n")
-		}
+	}
+	if strings.TrimSpace(diff) != "" {
+		b.WriteString("\n")
+		b.WriteString(m.st.paint(m.st.bold, "Diff"))
+		b.WriteString("\n")
+		b.WriteString(m.diffView(diff, state.diffExpanded))
+		b.WriteString("\n")
 	}
 
-	allowLabel := "[y] Allow"
-	allowAllLabel := "[a] Allow all this turn"
-	denyLabel := "[n] Deny"
-	b.WriteString("\n")
-	b.WriteString(m.st.paint(m.st.success, allowLabel) + m.st.paint(m.st.dim, "  ") +
-		m.st.paint(m.st.accent, allowAllLabel) + m.st.paint(m.st.dim, "  ") +
-		m.st.paint(m.st.error, denyLabel))
+	showDiffToggle := diffLineCount(diff) > compactDiffRows
+	buttons := []struct {
+		label  string
+		action mouseAction
+		style  lipgloss.Style
+	}{
+		{label: "[y] Allow", action: actionApprovalAllow, style: m.st.success},
+		{label: "[a] Allow all this turn", action: actionApprovalAllowAll, style: m.st.accent},
+		{label: "[n] Deny", action: actionApprovalDeny, style: m.st.error},
+	}
+	if showDiffToggle {
+		label := "[d] Full diff"
+		if state.diffExpanded {
+			label = "[d] Compact diff"
+		}
+		buttons = append(buttons, struct {
+			label  string
+			action mouseAction
+			style  lipgloss.Style
+		}{label: label, action: actionApprovalDiffToggle, style: m.st.info})
+	}
 
-	content := b.String()
-	buttonLine := strings.Count(content, "\n")
-	allowStart := 0
-	allowEnd := displayWidth(allowLabel)
-	allowAllStart := allowEnd + 2
-	allowAllEnd := allowAllStart + displayWidth(allowAllLabel)
-	denyStart := allowAllEnd + 2
-	denyEnd := denyStart + displayWidth(denyLabel)
-	card := m.overlayCard(content)
+	b.WriteString("\n")
+	buttonLine := strings.Count(b.String(), "\n")
 	insetY, insetX := 0, 0
 	if !m.st.plain {
 		insetY = 1 // top border
 		insetX = 2 // border + horizontal padding
 	}
-	m.overlayHits = []overlayHit{
-		{line: insetY + buttonLine, start: insetX + allowStart, end: insetX + allowEnd, action: actionApprovalAllow},
-		{line: insetY + buttonLine, start: insetX + allowAllStart, end: insetX + allowAllEnd, action: actionApprovalAllowAll},
-		{line: insetY + buttonLine, start: insetX + denyStart, end: insetX + denyEnd, action: actionApprovalDeny},
+
+	// Build the button row while recording a click span for every label so
+	// the hit geometry always matches what the user sees.
+	var bar strings.Builder
+	hits := make([]overlayHit, 0, len(buttons))
+	x := 0
+	for i, button := range buttons {
+		if i > 0 {
+			bar.WriteString(m.st.paint(m.st.dim, "  "))
+			x += 2
+		}
+		start := x
+		x += displayWidth(button.label)
+		bar.WriteString(m.st.paint(button.style, button.label))
+		hits = append(hits, overlayHit{
+			line:   insetY + buttonLine,
+			start:  insetX + start,
+			end:    insetX + x,
+			action: button.action,
+		})
 	}
-	return card
+	b.WriteString(bar.String())
+	m.overlayHits = hits
+	return m.overlayCard(b.String())
 }
 
 func (m *Model) askView() string {
@@ -530,10 +615,22 @@ func (m *Model) overlayCard(content string) string {
 	return m.st.modalBorder.Width(width).Render(content)
 }
 
-func (m *Model) diffView(diff string) string {
+// diffView renders the diff preview. Compact mode caps the preview at a dozen
+// lines; expanding it shows up to roughly a screenful before eliding the rest.
+func (m *Model) diffView(diff string, expanded bool) string {
 	lines := strings.Split(strings.ReplaceAll(diff, "\r\n", "\n"), "\n")
-	if len(lines) > maxDiffRows {
-		lines = append(lines[:maxDiffRows], fmt.Sprintf("… %d more diff lines", len(lines)-maxDiffRows))
+	limit := compactDiffRows
+	if expanded {
+		limit = expandedDiffRows
+	}
+	if len(lines) > limit {
+		trimmed := make([]string, 0, limit+1)
+		trimmed = append(trimmed, lines[:limit]...)
+		trimmed = append(trimmed, fmt.Sprintf("… %d more diff lines · [d] to expand", len(lines)-limit))
+		if expanded {
+			trimmed[len(trimmed)-1] = fmt.Sprintf("… %d more diff lines", len(lines)-limit)
+		}
+		lines = trimmed
 	}
 	for i, line := range lines {
 		switch {

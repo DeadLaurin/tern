@@ -26,11 +26,12 @@ import (
 var spinnerFrames = []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
 
 const (
-	tickInterval  = 60 * time.Millisecond
-	quitTimeout   = 3 * time.Second
-	maxEditorRows = 8
-	maxDiffRows   = 28
-	yoloLabel     = "YOLO !"
+	tickInterval     = 60 * time.Millisecond
+	quitTimeout      = 3 * time.Second
+	maxEditorRows    = 8
+	compactDiffRows  = 12
+	expandedDiffRows = 32
+	yoloLabel        = "YOLO !"
 )
 
 // thinkingMode controls how reasoning entries are rendered.
@@ -89,6 +90,10 @@ type approvalState struct {
 	parent   *agent.ApprovalRequest
 	sub      *subagent.ApprovalRequest
 	response chan approvalResult
+	// diffExpanded switches the approval card from a compact 12-line diff
+	// preview to a wider 32-line view. It starts collapsed and is toggled by
+	// pressing 'd' or clicking the [d] button.
+	diffExpanded bool
 }
 
 type approvalResult struct {
@@ -114,6 +119,10 @@ type Model struct {
 
 	width  int
 	height int
+
+	// theme is the active palette name ("dark" or "light"). It is kept on the
+	// model so /theme can toggle between the two without a restart.
+	theme string
 
 	viewport viewport.Model
 	ed       editor
@@ -867,8 +876,10 @@ func (m *Model) handleTurnDone(msg turnDoneMsg) {
 		m.usage = msg.result.TotalUsage
 		m.totalCost = msg.result.TotalCostUSD
 		m.cache = msg.result.CacheHitRate
-		if msg.result.Usage.PromptTokens > 0 {
-			m.ctxTokens = msg.result.Usage.PromptTokens
+		if msg.result.ContextTokens > 0 {
+			m.ctxTokens = msg.result.ContextTokens
+		} else if m.opts.Agent != nil {
+			m.ctxTokens = m.opts.Agent.ContextTokens()
 		}
 		if m.acceptSpeed(msg.result.TokensPerSec) {
 			m.liveSpeed = msg.result.TokensPerSec
@@ -995,6 +1006,13 @@ func (m *Model) handleAgentEvent(ev agent.Event) {
 	case agent.EventUsage:
 		if ev.Usage != nil {
 			m.usage = addUsage(m.usage, *ev.Usage)
+			if ev.ContextTokens > 0 {
+				m.ctxTokens = ev.ContextTokens
+			} else if ev.Usage.PromptTokens > 0 {
+				m.ctxTokens = ev.Usage.PromptTokens
+			}
+		} else if ev.ContextTokens > 0 {
+			m.ctxTokens = ev.ContextTokens
 		}
 		if ev.TotalCostUSD > 0 {
 			m.totalCost = ev.TotalCostUSD
@@ -1017,6 +1035,9 @@ func (m *Model) handleAgentEvent(ev agent.Event) {
 		if ev.CacheHitRate > 0 {
 			m.cache = ev.CacheHitRate
 		}
+		if ev.ContextTokens > 0 {
+			m.ctxTokens = ev.ContextTokens
+		}
 		if m.acceptSpeed(ev.TokensPerSec) {
 			m.liveSpeed = ev.TokensPerSec
 			m.lastSpeed = ev.TokensPerSec
@@ -1026,12 +1047,24 @@ func (m *Model) handleAgentEvent(ev agent.Event) {
 		m.dirty = true
 
 	case agent.EventCompact:
+		m.historyChars = 0
+		if ev.ContextTokens > 0 {
+			m.ctxTokens = ev.ContextTokens
+		} else if m.opts.Agent != nil {
+			m.ctxTokens = m.opts.Agent.ContextTokens()
+		} else {
+			m.ctxTokens = 0
+		}
 		if ev.Compact != nil {
-			m.addInfo(fmt.Sprintf("Context compacted: %d → %d messages (%s).",
+			m.addInfo(fmt.Sprintf("⟳ Context compacted: %d → %d messages (%s) · cache prefix reset.",
 				ev.Compact.MessagesBefore, ev.Compact.MessagesAfter, ev.Compact.Reason))
 		} else if ev.Message != "" {
-			m.addInfo(ev.Message)
+			m.addInfo("⟳ " + ev.Message)
+		} else {
+			m.addInfo("⟳ Context compacted · cache prefix reset.")
 		}
+		m.statusMsg = "Context compacted"
+		m.dirty = true
 
 	case agent.EventError:
 		if ev.Reason == string(agent.StopCancelled) || strings.Contains(ev.Message, "context canceled") {
@@ -1459,14 +1492,14 @@ func (m *Model) rebuildContent() {
 }
 
 func (m *Model) computeContextTokens() {
+	if m.ctxTokens > 0 || m.opts.Agent != nil {
+		return
+	}
 	chars := m.historyChars
 	for _, entry := range m.entries {
 		chars += len(entry.text) + len(entry.output)
 	}
-	tokens := chars / 4
-	if tokens > m.ctxTokens {
-		m.ctxTokens = tokens
-	}
+	m.ctxTokens = chars / 4
 }
 
 func (m *Model) renderTranscript() string {
