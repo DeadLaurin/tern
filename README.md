@@ -92,13 +92,16 @@ tern --rpc
 | `tern --continue` / `--resume <id>` | Continue the latest session or resume a specific one |
 | `tern --json` / `--rpc` | Stream structured JSONL events or run as a JSON-RPC server |
 | `tern --local` | Connect to a local Ollama / OpenAI-compatible endpoint |
+| `tern serve` | Start the minimalist web UI (`--lan`, `--password`, `--port`) |
+| `tern acp` | Serve Agent Client Protocol (ACP) over stdio for T3 Code with usage stats |
 | `tern doctor` | Check environment, API key status, toolchain (`rg`, `git`), and workspace |
 | `tern stats` | Show token usage, cache hit rate, and estimated cost |
 | `tern config` | Inspect effective layered settings (API key always redacted) |
 | `tern undo` / `tern log` | Restore edit checkpoints or inspect recent session activity |
 | `tern ext` | List, install, enable, disable, or remove folder extensions |
 | `tern policy` | Inspect active permission and deny rules |
-| `tern update` / `tern uninstall` | Self-update from GitHub Releases or cleanly uninstall |
+| `tern version` | Print the current version and check for newer releases |
+| `tern update` / `tern uninstall` | Self-update from GitHub Releases (with release notes) or cleanly uninstall |
 
 ---
 
@@ -121,7 +124,7 @@ tern --rpc
 | `/undo` · `/rewind` | Restore files to any earlier edit turn |
 | `/skills` · `/ext` · `/mcp` | Inspect loaded skills, extensions, and connected MCP servers |
 | `/compact` · `/plan` | Compact context manually or switch to read-only plan mode |
-| `/help` | Interactive command & shortcut browser |
+| `/version` · `/help` | Show version/update status or interactive command & shortcut browser |
 
 ---
 

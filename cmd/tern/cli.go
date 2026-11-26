@@ -111,6 +111,10 @@ func runWithOptions(o runOptions) int {
 			return runLogCommand(o.Args[1:], o)
 		case "policy":
 			return runPolicyCommand(o.Args[1:], o)
+		case "serve":
+			return runServeCommand(o.Args[1:], o)
+		case "acp":
+			return runACPCommand(o.Args[1:], o)
 		}
 	}
 
@@ -342,9 +346,11 @@ Usage:
   tern undo [n]
   tern log
   tern policy
+  tern serve [--lan] [--host <addr>] [--port <n>] [--password <pw>]
+  tern acp [--model <name>] [--permission <mode>]
   tern update [--check] [--force]
   tern uninstall [--yes] [--purge] [--dry-run]
-  tern version
+  tern version [--no-check]
 
 Flags:
   -p, --prompt <text>       run one prompt non-interactively
@@ -372,9 +378,11 @@ Subcommands:
   undo [n]                  roll back the last n checkpoint turns
   log                       list checkpoint turns for the latest session
   policy                    show the effective permission policy
+  serve                     start the LAN-accessible web UI
+  acp                       serve Agent Client Protocol (ACP) over stdio (T3 Code)
   update                    update the tern binary
   uninstall                 remove the tern binary
-  version                   print the version`)
+  version                   print the version and check for updates`)
 }
 
 func loadConfig(opts *cliOptions, workDir string) (*config.Config, error) {
