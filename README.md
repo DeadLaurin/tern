@@ -24,13 +24,13 @@ Type `tern` in any project folder and you're in. No subcommand ceremony, no heav
 **macOS & Linux**
 
 ```sh
-curl -fsSL https://disgusting.work/install.sh | sh
+curl -fsSL https://tern.disgusting.work/install.sh | sh
 ```
 
 **Windows (PowerShell)**
 
 ```powershell
-irm https://disgusting.work/install.ps1 | iex
+irm https://tern.disgusting.work/install.ps1 | iex
 ```
 
 **From source (Go)**
