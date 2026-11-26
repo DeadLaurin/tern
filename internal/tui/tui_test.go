@@ -2508,3 +2508,86 @@ func TestStreamingTinyDeltasAccumulateContextTokensAndResetCache(t *testing.T) {
 		t.Fatalf("after compact: ctxTokens=%d cache=%v, want 900 and 0", m.ctxTokens, m.cache)
 	}
 }
+
+func TestLiveSlashAutocompleteAndGhostCompletion(t *testing.T) {
+	m := newTestModel(t, Options{Version: "v0.3.1"})
+	m.width = 120
+	m.height = 40
+
+	// Typing "/" immediately shows the matching command list and ghost text.
+	typeText(t, m, "/")
+	if len(m.slashMenu) == 0 {
+		t.Fatal("expected slash menu to open when typing '/'")
+	}
+	if m.ed.Ghost() == "" {
+		t.Fatal("expected inline ghost completion when typing '/'")
+	}
+
+	// Filtering to "/st" narrows to stats & steer and updates ghost text.
+	typeText(t, m, "st")
+	if len(m.slashMenu) != 2 || m.slashMenu[0].name != "stats" || m.slashMenu[1].name != "steer" {
+		t.Fatalf("slashMenu for /st = %+v, want [stats, steer]", m.slashMenu)
+	}
+	if m.ed.Ghost() != "ats" {
+		t.Fatalf("ghost for /st = %q, want %q", m.ed.Ghost(), "ats")
+	}
+	view := m.View()
+	if !strings.Contains(view, "/stats") || !strings.Contains(view, "/steer") {
+		t.Fatalf("view missing live slash menu items:\n%s", view)
+	}
+
+	// Down arrow moves selection to /steer and updates ghost text.
+	press(t, m, tea.KeyDown)
+	if m.slashIndex != 1 || m.ed.Ghost() != "eer" {
+		t.Fatalf("after Down: index=%d ghost=%q, want 1 and %q", m.slashIndex, m.ed.Ghost(), "eer")
+	}
+
+	// Tab completes the selected command and closes the menu.
+	press(t, m, tea.KeyTab)
+	if got := m.ed.Value(); got != "/steer " {
+		t.Fatalf("after Tab: value=%q, want %q", got, "/steer ")
+	}
+	if len(m.slashMenu) != 0 || m.ed.Ghost() != "" {
+		t.Fatalf("slash menu not cleared after Tab: len=%d ghost=%q", len(m.slashMenu), m.ed.Ghost())
+	}
+
+	// Esc dismisses the menu without clearing the editor text.
+	m.ed.Reset()
+	typeText(t, m, "/mo")
+	if len(m.slashMenu) == 0 {
+		t.Fatal("expected slash menu for /mo")
+	}
+	press(t, m, tea.KeyEsc)
+	if len(m.slashMenu) != 0 || m.ed.Ghost() != "" {
+		t.Fatalf("Esc did not dismiss slash menu: len=%d ghost=%q", len(m.slashMenu), m.ed.Ghost())
+	}
+	if m.ed.Value() != "/mo" {
+		t.Fatalf("Esc altered editor text: %q", m.ed.Value())
+	}
+}
+
+func TestVersionIndicatorAndUpdateBadge(t *testing.T) {
+	m := newTestModel(t, Options{Version: "v0.3.1"})
+	m.width = 120
+	m.height = 40
+
+	view := m.View()
+	if !strings.Contains(view, "v0.3.1") {
+		t.Fatalf("view missing version indicator:\n%s", view)
+	}
+
+	// Delivering an async update check shows the update indicator in welcome and sidebar.
+	m.Update(updateCheckMsg{latest: "v0.3.2", available: true})
+	view = m.View()
+	if !strings.Contains(view, "v0.3.2") || !strings.Contains(view, "tern update") {
+		t.Fatalf("view missing update available indicator:\n%s", view)
+	}
+
+	// /ver + Enter completes to /version and prints version + update info.
+	typeText(t, m, "/ver")
+	press(t, m, tea.KeyEnter)
+	view = m.View()
+	if !strings.Contains(view, "tern v0.3.1") || !strings.Contains(view, "update available: v0.3.2") {
+		t.Fatalf("/version output missing version/update info:\n%s", view)
+	}
+}

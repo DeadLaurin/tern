@@ -52,8 +52,9 @@ type Options struct {
 	WorkDir         string
 	GlobalConfigDir string
 	GitBranch       string
-	Version         string
-	NoColor         bool
+	Version     string
+	CheckUpdate func(ctx context.Context) (latest string, available bool, err error)
+	NoColor     bool
 }
 
 // Run starts the interactive program and blocks until it exits.

@@ -27,6 +27,7 @@ type editor struct {
 	suggestions     []string
 	suggestionIndex int
 	suggestionToken string
+	ghost           string
 
 	attachments []provider.ContentPart
 }
@@ -51,6 +52,7 @@ func (e *editor) SetValue(s string) {
 	e.cursor = len(e.text)
 	e.resetHistoryNav()
 	e.suggestions = nil
+	e.ghost = ""
 }
 
 // Reset clears the buffer, attachments and completion state.
@@ -61,8 +63,15 @@ func (e *editor) Reset() {
 	e.suggestions = nil
 	e.suggestionIndex = 0
 	e.suggestionToken = ""
+	e.ghost = ""
 	e.resetHistoryNav()
 }
+
+// SetGhost sets the inline muted completion suffix rendered after the cursor.
+func (e *editor) SetGhost(s string) { e.ghost = s }
+
+// Ghost returns the current inline completion suffix.
+func (e *editor) Ghost() string { return e.ghost }
 
 // IsEmpty reports whether the buffer only contains whitespace.
 func (e *editor) IsEmpty() bool { return strings.TrimSpace(string(e.text)) == "" }
@@ -553,6 +562,15 @@ func (e *editor) View(width int, st styles) string {
 			available = 1
 		}
 		display = truncateAround(display, curCol, available, i == curLine)
+		if i == curLine && e.ghost != "" && curCol == len([]rune(raw)) {
+			rem := available - displayWidth(display)
+			if rem > 0 {
+				ghost := truncateCell(e.ghost, rem)
+				if ghost != "" {
+					display += st.paint(st.placeholder, ghost)
+				}
+			}
+		}
 		if raw == "" && e.IsEmpty() && i == 0 && firstLine {
 			display = st.paint(st.placeholder, "Ask tern anything… (/help for commands)")
 			if st.plain {

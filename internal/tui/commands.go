@@ -47,6 +47,38 @@ var builtinCommandNames = []string{
 	"theme",
 	"thinking",
 	"undo",
+	"version",
+	"yolo",
+}
+
+var builtinCommandDescriptions = map[string]string{
+	"agents":   "Inspect sub-agents",
+	"clear":    "Clear transcript view",
+	"compact":  "Compact conversation context",
+	"config":   "Show effective settings",
+	"context":  "Show context token usage",
+	"cost":     "Show session cost & cache",
+	"effort":   "Set reasoning effort",
+	"export":   "Export session transcript",
+	"ext":      "List loaded extensions",
+	"fork":     "Fork current session",
+	"help":     "Show commands & shortcuts",
+	"mcp":      "Inspect MCP servers",
+	"model":    "Switch model & reasoning",
+	"name":     "Rename current session",
+	"plan":     "Toggle read-only plan mode",
+	"queue":    "Inspect or clear queued prompts",
+	"quit":     "Exit tern",
+	"rewind":   "Rewind edits to an earlier turn",
+	"sessions": "Browse & resume sessions",
+	"skills":   "Browse & load skills",
+	"stats":    "Usage & cache dashboard",
+	"steer":    "Steer active turn mid-flight",
+	"theme":    "Switch color theme",
+	"thinking": "Set reasoning effort",
+	"undo":     "Undo latest edit turn",
+	"version":  "Show version & update status",
+	"yolo":     "Toggle allow-all permission mode",
 }
 
 // handleSlash dispatches a slash command. Custom commands loaded from the
@@ -84,6 +116,9 @@ func (m *Model) handleSlash(line string, attachments []provider.ContentPart) tea
 	case "yolo":
 		m.toggleYolo()
 		return nil
+
+	case "version":
+		return m.cmdVersion()
 
 	case "compact":
 		return m.cmdCompact(args)
@@ -624,6 +659,36 @@ func (m *Model) cmdName(args string) tea.Cmd {
 	}
 	m.addError("No active session to rename.")
 	return nil
+}
+
+func (m *Model) cmdVersion() tea.Cmd {
+	ver := m.versionLabel()
+	if ver == "" {
+		ver = "dev"
+	}
+	if m.updateAvailable != "" {
+		m.addInfo(fmt.Sprintf("tern %s · update available: %s (run \"tern update\")", ver, m.updateAvailable))
+		return nil
+	}
+	if m.updateChecked {
+		m.addInfo(fmt.Sprintf("tern %s · up to date", ver))
+		return nil
+	}
+	if m.opts.CheckUpdate == nil {
+		m.addInfo("tern " + ver)
+		return nil
+	}
+	m.addInfo("tern " + ver + " · checking for updates…")
+	check := m.opts.CheckUpdate
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
+		latest, available, err := check(ctx)
+		if err != nil {
+			return nil
+		}
+		return updateCheckMsg{latest: latest, available: available, announce: true}
+	}
 }
 
 func (m *Model) cmdExport(args string) tea.Cmd {

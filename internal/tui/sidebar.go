@@ -160,6 +160,13 @@ func (m *Model) sidebarContext(width int) string {
 		modelLine += " · " + effort
 	}
 	lines := []string{m.st.paint(m.st.statusValue, truncateCell(modelLine, width))}
+	if ver := m.versionLabel(); ver != "" {
+		if m.updateAvailable != "" {
+			lines = append(lines, m.st.paint(m.st.warn, truncateCell(ver+" · ↑ "+m.updateAvailable+" (tern update)", width)))
+		} else {
+			lines = append(lines, m.st.paint(m.st.dim, truncateCell("tern "+ver, width)))
+		}
+	}
 	if branch := strings.TrimSpace(m.opts.GitBranch); branch != "" {
 		lines = append(lines, m.st.paint(m.st.dim, truncateCell("branch "+branch, width)))
 	}

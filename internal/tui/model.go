@@ -206,6 +206,15 @@ type Model struct {
 
 	commands []terncontext.SlashCommand
 
+	// Live slash-command autocomplete state shown while typing a "/" prefix.
+	slashMenu      []slashItem
+	slashIndex     int
+	slashDismissed string
+
+	// Non-blocking release update status populated by Init or /version.
+	updateAvailable string
+	updateChecked   bool
+
 	// historyPath is the persisted terminal-style chatbar history. It stays
 	// empty when no config dir was supplied so tests and embedded use never
 	// touch the user's home directory.
@@ -253,20 +262,46 @@ type repoSummaryMsg struct {
 	summary string
 }
 
-// Init starts the UI ticker and kicks off the non-blocking repository index so
-// frame 1 renders immediately on any repository size.
+type updateCheckMsg struct {
+	latest    string
+	available bool
+	announce  bool
+}
+
+type slashItem struct {
+	name string
+	desc string
+}
+
+// Init starts the UI ticker and kicks off the non-blocking repository index
+// (and optional update check) so frame 1 renders immediately.
 func (m *Model) Init() tea.Cmd {
-	tick := tea.Tick(tickInterval, func(t time.Time) tea.Msg { return tickMsg(t) })
-	workDir := m.opts.WorkDir
-	if workDir == "" {
-		return tick
+	cmds := []tea.Cmd{
+		tea.Tick(tickInterval, func(t time.Time) tea.Msg { return tickMsg(t) }),
 	}
-	return tea.Batch(tick, func() tea.Msg {
-		if index, err := terncontext.IndexRepo(workDir, 80); err == nil && index != nil {
-			return repoSummaryMsg{summary: index.Summary()}
-		}
-		return nil
-	})
+	if workDir := m.opts.WorkDir; workDir != "" {
+		cmds = append(cmds, func() tea.Msg {
+			if index, err := terncontext.IndexRepo(workDir, 80); err == nil && index != nil {
+				return repoSummaryMsg{summary: index.Summary()}
+			}
+			return nil
+		})
+	}
+	if check := m.opts.CheckUpdate; check != nil {
+		cmds = append(cmds, func() tea.Msg {
+			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+			defer cancel()
+			latest, available, err := check(ctx)
+			if err != nil {
+				return nil
+			}
+			return updateCheckMsg{latest: latest, available: available}
+		})
+	}
+	if len(cmds) == 1 {
+		return cmds[0]
+	}
+	return tea.Batch(cmds...)
 }
 
 // Update handles one message. It never performs blocking agent work on the
@@ -278,6 +313,19 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.repoSummary = msg.summary
 			m.dirty = true
 		}
+		return m, nil
+
+	case updateCheckMsg:
+		m.updateChecked = true
+		if msg.available && msg.latest != "" {
+			m.updateAvailable = msg.latest
+			if msg.announce {
+				m.addInfo(fmt.Sprintf("Update available: %s (run \"tern update\")", msg.latest))
+			}
+		} else if msg.announce && msg.latest != "" {
+			m.addInfo(fmt.Sprintf("Up to date (%s).", msg.latest))
+		}
+		m.dirty = true
 		return m, nil
 
 	case tea.WindowSizeMsg:
@@ -487,6 +535,13 @@ func (m *Model) handleKey(msg tea.KeyMsg) tea.Cmd {
 		return nil
 	}
 	if msg.Type == tea.KeyEsc {
+		if len(m.slashMenu) > 0 {
+			m.slashDismissed = m.ed.Value()
+			m.slashMenu = nil
+			m.slashIndex = 0
+			m.ed.SetGhost("")
+			return nil
+		}
 		if m.agentsOpen {
 			m.agentsOpen = false
 			m.statusMsg = "Ready"
@@ -597,10 +652,25 @@ func (m *Model) handleEditorKey(msg tea.KeyMsg) tea.Cmd {
 	case tea.KeyEnter:
 		if msg.Alt || msg.String() == "shift+enter" || msg.String() == "ctrl+j" {
 			m.ed.InsertNewline()
+			m.syncSlashMenu()
 			return nil
+		}
+		if len(m.slashMenu) > 0 {
+			selected := m.slashMenu[m.slashIndex].name
+			val := strings.TrimSpace(m.ed.Value())
+			if val == "/" || !strings.EqualFold(val, "/"+selected) {
+				m.ed.SetValue("/" + selected)
+			}
+			m.clearSlashMenu()
 		}
 		return m.submit()
 	case tea.KeyTab:
+		if len(m.slashMenu) > 0 {
+			selected := m.slashMenu[m.slashIndex].name
+			m.ed.SetValue("/" + selected + " ")
+			m.clearSlashMenu()
+			return nil
+		}
 		m.complete()
 		return nil
 	case tea.KeyRunes:
@@ -614,10 +684,26 @@ func (m *Model) handleEditorKey(msg tea.KeyMsg) tea.Cmd {
 	case tea.KeyLeft:
 		m.ed.MoveLeft()
 	case tea.KeyRight:
+		if len(m.slashMenu) > 0 && m.ed.Cursor() == m.ed.Len() && m.ed.Ghost() != "" {
+			selected := m.slashMenu[m.slashIndex].name
+			m.ed.SetValue("/" + selected)
+			m.syncSlashMenu()
+			return nil
+		}
 		m.ed.MoveRight()
 	case tea.KeyUp:
+		if len(m.slashMenu) > 0 {
+			m.slashIndex = (m.slashIndex - 1 + len(m.slashMenu)) % len(m.slashMenu)
+			m.updateSlashGhost()
+			return nil
+		}
 		m.ed.MoveUp()
 	case tea.KeyDown:
+		if len(m.slashMenu) > 0 {
+			m.slashIndex = (m.slashIndex + 1) % len(m.slashMenu)
+			m.updateSlashGhost()
+			return nil
+		}
 		m.ed.MoveDown()
 	case tea.KeyHome:
 		m.ed.MoveLineStart()
@@ -636,6 +722,7 @@ func (m *Model) handleEditorKey(msg tea.KeyMsg) tea.Cmd {
 	case tea.KeyCtrlR:
 		m.ed.StartSearch()
 	}
+	m.syncSlashMenu()
 	return nil
 }
 
@@ -1313,6 +1400,9 @@ func (m *Model) View() string {
 	if queueView := m.queueStripView(); queueView != "" {
 		bottom = append(bottom, m.layoutBlock(queueView))
 	}
+	if slashView := m.slashMenuView(); slashView != "" {
+		bottom = append(bottom, m.layoutBlock(slashView))
+	}
 	bottom = append(bottom, m.layoutBlock(editorView))
 
 	used := 0
@@ -1348,6 +1438,9 @@ func (m *Model) twoPaneView() string {
 	}
 	if queueView := m.queueStripView(); queueView != "" {
 		bottom = append(bottom, queueView)
+	}
+	if slashView := m.slashMenuView(); slashView != "" {
+		bottom = append(bottom, slashView)
 	}
 	bottom = append(bottom, m.editorBoxView(), m.statusView())
 
@@ -1601,10 +1694,17 @@ func (m *Model) renderWelcome() string {
 		}
 		lines = append(lines, "")
 	}
+	heading := m.st.paint(m.st.heading, "tern")
+	if version != "" {
+		heading += " " + dim(version)
+	}
 	lines = append(lines,
-		m.st.paint(m.st.heading, "tern"),
+		heading,
 		m.st.paint(m.st.accent, modelLabel),
 	)
+	if m.updateAvailable != "" {
+		lines = append(lines, m.st.paint(m.st.warn, fmt.Sprintf("update %s available · run tern update", m.updateAvailable)))
+	}
 	if strings.TrimSpace(m.repoSummary) != "" {
 		lines = append(lines, dim(m.repoSummary))
 	}
@@ -1810,6 +1910,9 @@ func (m *Model) statusView() string {
 		parts = append(parts, statusPart{text: "^Y yolo", action: actionStatusYolo})
 	}
 	parts = append(parts, statusPart{text: "^B panel", action: actionStatusPanel})
+	if m.updateAvailable != "" && !m.twoPane() {
+		parts = append(parts, statusPart{text: "↑ " + m.updateAvailable})
+	}
 	if !m.followTail && !m.viewport.AtBottom() {
 		parts = append(parts, statusPart{text: "↓ scrolled up", action: actionStatusBottom})
 	}
@@ -2103,6 +2206,162 @@ func (m *Model) completionTokenActive() bool {
 		return true
 	}
 	return start == 0 && strings.HasPrefix(token, "/")
+}
+
+func (m *Model) versionLabel() string {
+	return strings.TrimSpace(m.opts.Version)
+}
+
+func (m *Model) clearSlashMenu() {
+	m.slashMenu = nil
+	m.slashIndex = 0
+	m.slashDismissed = ""
+	m.ed.SetGhost("")
+}
+
+func (m *Model) syncSlashMenu() {
+	if m.ed.historyBrowsing {
+		m.clearSlashMenu()
+		return
+	}
+	raw := m.ed.Value()
+	if raw == "" || !strings.HasPrefix(raw, "/") || strings.ContainsAny(raw, " \t\n\r") {
+		m.clearSlashMenu()
+		return
+	}
+	if m.slashDismissed != "" && raw == m.slashDismissed {
+		m.slashMenu = nil
+		m.slashIndex = 0
+		m.ed.SetGhost("")
+		return
+	}
+	m.slashDismissed = ""
+	query := strings.ToLower(strings.TrimPrefix(raw, "/"))
+
+	prevSelected := ""
+	if len(m.slashMenu) > 0 && m.slashIndex >= 0 && m.slashIndex < len(m.slashMenu) {
+		prevSelected = m.slashMenu[m.slashIndex].name
+	}
+
+	seen := make(map[string]struct{}, len(builtinCommandNames)+len(m.commands))
+	items := make([]slashItem, 0, len(builtinCommandNames)+len(m.commands))
+	for _, name := range builtinCommandNames {
+		if strings.HasPrefix(name, query) {
+			seen[name] = struct{}{}
+			items = append(items, slashItem{
+				name: name,
+				desc: builtinCommandDescriptions[name],
+			})
+		}
+	}
+	for _, cmd := range m.commands {
+		lower := strings.ToLower(cmd.Name)
+		if !strings.HasPrefix(lower, query) {
+			continue
+		}
+		if _, dup := seen[lower]; dup {
+			continue
+		}
+		seen[lower] = struct{}{}
+		desc := strings.TrimSpace(cmd.Description)
+		if desc == "" {
+			desc = "custom command"
+		}
+		items = append(items, slashItem{name: cmd.Name, desc: desc})
+	}
+	sort.Slice(items, func(i, j int) bool {
+		return strings.ToLower(items[i].name) < strings.ToLower(items[j].name)
+	})
+
+	if len(items) == 0 {
+		m.slashMenu = nil
+		m.slashIndex = 0
+		m.ed.SetGhost("")
+		return
+	}
+
+	m.slashMenu = items
+	m.slashIndex = 0
+	if prevSelected != "" {
+		for i, item := range items {
+			if item.name == prevSelected {
+				m.slashIndex = i
+				break
+			}
+		}
+	}
+	m.updateSlashGhost()
+}
+
+func (m *Model) updateSlashGhost() {
+	if len(m.slashMenu) == 0 || m.slashIndex < 0 || m.slashIndex >= len(m.slashMenu) {
+		m.ed.SetGhost("")
+		return
+	}
+	raw := m.ed.Value()
+	if !strings.HasPrefix(raw, "/") || m.ed.Cursor() != m.ed.Len() {
+		m.ed.SetGhost("")
+		return
+	}
+	typed := strings.TrimPrefix(raw, "/")
+	target := m.slashMenu[m.slashIndex].name
+	if len(target) > len(typed) && strings.HasPrefix(strings.ToLower(target), strings.ToLower(typed)) {
+		m.ed.SetGhost(target[len(typed):])
+		return
+	}
+	m.ed.SetGhost("")
+}
+
+func (m *Model) slashMenuView() string {
+	if len(m.slashMenu) == 0 {
+		return ""
+	}
+	width := m.contentWidth()
+	const maxVisible = 6
+	start := 0
+	if len(m.slashMenu) > maxVisible {
+		start = m.slashIndex - maxVisible/2
+		if start < 0 {
+			start = 0
+		}
+		if start+maxVisible > len(m.slashMenu) {
+			start = len(m.slashMenu) - maxVisible
+		}
+	}
+	end := start + maxVisible
+	if end > len(m.slashMenu) {
+		end = len(m.slashMenu)
+	}
+
+	lines := make([]string, 0, end-start+1)
+	for i := start; i < end; i++ {
+		item := m.slashMenu[i]
+		marker := "  "
+		nameStyle := m.st.info
+		descStyle := m.st.dim
+		if i == m.slashIndex {
+			marker = "▸ "
+			if m.st.plain {
+				marker = "> "
+			}
+			nameStyle = m.st.selected
+			descStyle = m.st.statusValue
+		}
+		cmdCol := fmt.Sprintf("/%-11s", item.name)
+		row := marker + m.st.paint(nameStyle, cmdCol)
+		if item.desc != "" {
+			avail := width - displayWidth(marker) - displayWidth(cmdCol) - 1
+			if avail > 4 {
+				row += " " + m.st.paint(descStyle, truncateCell(item.desc, avail))
+			}
+		}
+		lines = append(lines, truncateAnsi(row, width))
+	}
+	if len(m.slashMenu) > maxVisible {
+		hint := fmt.Sprintf("  … %d/%d · ↑↓ select · Tab complete · Esc close", m.slashIndex+1, len(m.slashMenu))
+		lines = append(lines, m.st.paint(m.st.dim, truncateCell(hint, width)))
+	}
+	return strings.Join(lines, "\n")
 }
 
 func (m *Model) complete() {
