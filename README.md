@@ -15,7 +15,9 @@
 
 A small, fast, minimalist terminal coding agent for the DeepSeek API.
 
-Type `tern` in any project folder and you're in. No subcommand ceremony, no heavy runtime, no neon clutter — just a single Go binary, a calm two-pane terminal interface, transparent tools, and files you can read yourself.
+Type `tern` in any repository and start working. Single static Go binary, ~10 ms startup, calm two-pane TUI, parallel sub-agents, and transparent plain-file state.
+
+Website & installer: **[tern.disgusting.work](https://tern.disgusting.work)**
 
 ---
 
@@ -33,50 +35,74 @@ curl -fsSL https://tern.disgusting.work/install.sh | sh
 irm https://tern.disgusting.work/install.ps1 | iex
 ```
 
-**From source (Go)**
+**From source (Go 1.24+)**
 
 ```sh
-go install github.com/tern-agent/tern/cmd/tern@latest
+git clone https://github.com/DeadLaurin/tern.git
+cd tern && go install ./cmd/tern
 ```
 
-To update later, run `tern update`.
+Release binaries are SHA-256 verified from [GitHub Releases](https://github.com/DeadLaurin/tern/releases). Update anytime with `tern update` or remove with `tern uninstall`.
 
 ---
 
-## Getting Started
+## Quick Start
 
 ```sh
 cd your-project
 tern
 ```
 
-On the first run, if `DEEPSEEK_API_KEY` isn't set in your environment, `tern` asks for it once and saves it to your OS config directory with `0600` permissions. On every run after that, it opens straight into your project and automatically picks up any `AGENTS.md` or `TERN.md` files along the way.
+On first launch, if `DEEPSEEK_API_KEY` isn't set in your environment, `tern` prompts for it once and saves it to your OS config directory (`0600`). Every launch after that opens straight into your repo and automatically picks up `AGENTS.md` or `TERN.md` instructions.
 
-Prefer non-interactive or scripted use?
+Want to run against a local model (Ollama or any OpenAI-compatible server)?
+
+```sh
+tern --local
+```
+
+Prefer non-interactive or scripted usage?
 
 ```sh
 tern -p "summarize internal/agent/agent.go"
 git diff | tern -p "review this diff for subtle bugs"
 tern --json -p "find all TODOs"
 tern --rpc
-tern stats
-tern config
 ```
 
 ---
 
-## What It Does
+## Highlights
 
-- **Calm two-pane workspace** — Chat on the left, live inspector on the right (context & cache gauges, sub-agent tabs, to-dos, active task). Collapses cleanly on narrow terminals, toggles with `Ctrl+B`, and respects `NO_COLOR`.
-- **Built for DeepSeek V4** — Defaults to `deepseek-flash` (1M context, native vision) with `deepseek-v4-pro` one keypress away. Strictly append-only history, deterministic tool schemas, and proper multi-turn `reasoning_content` handling so DeepSeek's automatic prefix cache actually hits.
-- **Parallel sub-agents** — Delegates exploration, web research, code review, or isolated edits concurrently (`--max-agents`), with per-path write locks, live status in the right rail, and `Enter` to peek straight into any sub-agent's thread.
-- **Queueing & mid-turn steering** — Keep typing while `tern` is working: press `Enter` to queue follow-ups, or `Ctrl+S` to steer the current turn mid-flight.
-- **Safe edits & instant undo** — Shadow-copy file snapshots before every edit turn (no git repo needed), so `/undo` and `/rewind` cleanly roll back changes.
-- **Plain-file sessions & extensibility** — Append-only JSONL sessions (`--continue`, `--resume`, `/sessions`, `/fork`, `/export`), on-demand skills (`~/.config/tern/skills`, `./.tern/skills`), custom slash commands, lifecycle hooks, and MCP servers (stdio & HTTP).
+- **Minimal look, hidden depth** — Calm two-pane TUI (chat on the left, live inspector on the right with context & cache gauges, clickable sub-agent tabs, to-dos, and right-click copy). Collapses cleanly on narrow terminals, toggles with `Ctrl+B`, and respects `NO_COLOR`.
+- **Prefix-cache first for DeepSeek V4** — Defaults to `deepseek-flash` (1M context, native vision) with `deepseek-v4-pro` one keypress away. Strictly append-only history, deterministic tool schemas, and multi-turn `reasoning_content` passback keep DeepSeek's automatic prefix cache warm.
+- **Parallel sub-agents** — Delegates exploration, research, code review, or edits concurrently (`--max-agents`), with per-path write locks, live sidebar status, and one-click thread peeking.
+- **Queueing & mid-turn steering** — Keep typing while `tern` works: press `Enter` to queue follow-ups, or `Ctrl+S` to steer the active turn mid-flight without losing context.
+- **Instant undo without git** — Shadow-copy file checkpoints before every edit turn so `/undo`, `/rewind`, or `tern undo` cleanly roll back changes in any directory.
+- **Extensible & transparent** — Plain JSONL sessions (`--continue`, `--resume`, `/sessions`, `/fork`, `/export`), on-demand skills, lifecycle hooks, MCP servers (stdio & HTTP), and folder-based extensions (`tern ext`, `/ext`).
 
 ---
 
-## Keybindings & Commands
+## CLI & Subcommands
+
+| Command | Purpose |
+| --- | --- |
+| `tern` | Launch the interactive TUI in the current directory |
+| `tern -p "..."` | Run a single non-interactive prompt (supports piped stdin) |
+| `tern --continue` / `--resume <id>` | Continue the latest session or resume a specific one |
+| `tern --json` / `--rpc` | Stream structured JSONL events or run as a JSON-RPC server |
+| `tern --local` | Connect to a local Ollama / OpenAI-compatible endpoint |
+| `tern doctor` | Check environment, API key status, toolchain (`rg`, `git`), and workspace |
+| `tern stats` | Show token usage, cache hit rate, and estimated cost |
+| `tern config` | Inspect effective layered settings (API key always redacted) |
+| `tern undo` / `tern log` | Restore edit checkpoints or inspect recent session activity |
+| `tern ext` | List, install, enable, disable, or remove folder extensions |
+| `tern policy` | Inspect active permission and deny rules |
+| `tern update` / `tern uninstall` | Self-update from GitHub Releases or cleanly uninstall |
+
+---
+
+## Keybindings & Slash Commands
 
 | Shortcut / Command | What it does |
 | --- | --- |
@@ -87,13 +113,13 @@ tern config
 | `Ctrl+Y` / `/yolo` | Toggle allow-all mode on/off (restores previous mode) |
 | `Ctrl+B` | Toggle the right inspector sidebar |
 | `Tab` → `Enter` | Focus sub-agents in the sidebar and peek into a thread |
-| `↑` / `↓` & `Ctrl+R` | Persistent shell-style command history & reverse search |
-| `Ctrl+G` | Compose a longer prompt in your `$EDITOR` |
-| `Ctrl+C` | Cancel the current turn and sub-agents (twice to quit) |
-| `/stats` | Visual usage & activity dashboard (cache gauge, sparklines, cost) |
+| `↑` / `↓` & `Ctrl+R` | Persistent shell-style input history & reverse search |
+| `Ctrl+G` | Compose a longer prompt in `$EDITOR` |
+| `Ctrl+C` | Cancel the active turn and sub-agents (twice to quit) |
+| `/stats` | Usage dashboard with cache gauge, sparklines, and cost |
 | `/sessions` | Browse, search, resume, fork, rename, or delete sessions |
 | `/undo` · `/rewind` | Restore files to any earlier edit turn |
-| `/skills` · `/mcp` | Inspect & load skills or check connected MCP servers |
+| `/skills` · `/ext` · `/mcp` | Inspect loaded skills, extensions, and connected MCP servers |
 | `/compact` · `/plan` | Compact context manually or switch to read-only plan mode |
 | `/help` | Interactive command & shortcut browser |
 
@@ -101,21 +127,19 @@ tern config
 
 ## Configuration & Files
 
-Configuration layers cleanly in order: `defaults < global < project < env < flags`.
+Configuration merges in order: `defaults < global < project < env < flags`.
 
-- Global config: `~/.config/tern/config.toml` (or `%APPDATA%\tern` on Windows)
-- Project overrides: `./.tern/config.toml`
-- Pricing table: `~/.config/tern/pricing.toml` (editable off-peak / peak UTC rates)
-- MCP & hooks: `mcp.toml` and `hooks.toml` in global config or `./.tern/`
-- Sessions: `~/.local/share/tern/sessions/` (append-only JSONL, including child sub-agent transcripts)
-
-Run `tern config` anytime to inspect effective settings (your API key is always redacted).
+- **Global config**: `~/.config/tern/config.toml` (or `%APPDATA%\tern` on Windows)
+- **Project overrides**: `./.tern/config.toml`
+- **Pricing table**: `~/.config/tern/pricing.toml` (editable off-peak / peak UTC rates)
+- **Extensions, skills, MCP, hooks**: `~/.config/tern/` or `./.tern/` (`extensions/`, `skills/`, `mcp.toml`, `hooks.toml`)
+- **Sessions**: `~/.local/share/tern/sessions/` (append-only JSONL, including child sub-agent transcripts)
 
 ---
 
 ## Safety
 
-`tern` can run shell commands and edit files. By default it runs in `ask` mode, shows unified diffs before edits, and ships with built-in deny rules blocking destructive commands (`rm -rf` on `/` or `~`, raw device writes, etc.) and sensitive paths (`~/.ssh`, credentials). Web pages, MCP results, and sub-agent reports are treated as untrusted external data and can never escalate permissions.
+By default `tern` runs in `ask` mode, shows unified diffs before applying edits, and enforces built-in deny rules against destructive shell commands (`rm -rf` on `/` or `~`, raw device writes, etc.) and sensitive paths (`~/.ssh`, credentials). Web pages, MCP outputs, and sub-agent reports are treated as untrusted data and can never escalate permissions.
 
 ---
 
@@ -127,4 +151,6 @@ go vet ./...
 go build ./cmd/tern
 ```
 
-Welcome aboard — pull up a terminal and type `tern`.
+## License
+
+[MIT](LICENSE)
