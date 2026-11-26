@@ -92,13 +92,14 @@ tern --rpc
 | `tern --continue` / `--resume <id>` | Continue the latest session or resume a specific one |
 | `tern --json` / `--rpc` | Stream structured JSONL events or run as a JSON-RPC server |
 | `tern --local` | Connect to a local Ollama / OpenAI-compatible endpoint |
-| `tern serve` | Start the minimalist web UI (`--lan`, `--password`, `--port`) |
-| `tern acp` | Serve Agent Client Protocol (ACP) over stdio for T3 Code with usage stats |
+| `tern serve` | Start the minimalist LAN web UI (`0.0.0.0:7433`, `--password`, `--local-only`) |
+| `tern acp` | Serve Agent Client Protocol (ACP) over stdio for ACP hosts with usage stats |
+| `tern plugin` | List, scaffold (`new`), install, remove, or print the AI `guide` for plugins |
+| `tern theme` | Manage your local CSS design system (`~/.config/tern/theme.css`) |
 | `tern doctor` | Check environment, API key status, toolchain (`rg`, `git`), and workspace |
 | `tern stats` | Show token usage, cache hit rate, and estimated cost |
 | `tern config` | Inspect effective layered settings (API key always redacted) |
 | `tern undo` / `tern log` | Restore edit checkpoints or inspect recent session activity |
-| `tern ext` | List, install, enable, disable, or remove folder extensions |
 | `tern policy` | Inspect active permission and deny rules |
 | `tern version` | Print the current version and check for newer releases |
 | `tern update` / `tern uninstall` | Self-update from GitHub Releases (with release notes) or cleanly uninstall |
@@ -122,9 +123,9 @@ tern --rpc
 | `/stats` | Usage dashboard with cache gauge, sparklines, and cost |
 | `/sessions` | Browse, search, resume, fork, rename, or delete sessions |
 | `/undo` · `/rewind` | Restore files to any earlier edit turn |
-| `/skills` · `/ext` · `/mcp` | Inspect loaded skills, extensions, and connected MCP servers |
+| `/skills` · `/plugins` · `/mcp` | Inspect loaded skills, plugins, and connected MCP servers |
 | `/compact` · `/plan` | Compact context manually or switch to read-only plan mode |
-| `/version` · `/help` | Show version/update status or interactive command & shortcut browser |
+| `/changelog` · `/version` · `/help` | Show What's New popup, version/update status, or command browser |
 
 ---
 

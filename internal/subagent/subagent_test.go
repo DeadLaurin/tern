@@ -344,8 +344,8 @@ func TestPathLocker(t *testing.T) {
 			t.Errorf("waiting acquire: %v", err)
 			return
 		}
-		close(acquired)
 		r()
+		close(acquired)
 	}()
 	select {
 	case <-acquired:

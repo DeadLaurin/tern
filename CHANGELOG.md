@@ -4,6 +4,22 @@ All notable changes to tern are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and tern adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v0.5.0] - 2026-11-26
+
+### Added
+- **Plugins** (renamed from extensions, with full backwards compatibility): discover from `~/.config/tern/plugins/` and `./.tern/plugins/` (`plugin.toml`), scaffold starter plugins with `tern plugin new <name>`, and print the AI-friendly spec with `tern plugin guide` (plus `/plugins` in the TUI).
+- **Local CSS design system**: customize colors and typography in `~/.config/tern/theme.css` (and optional `./.tern/theme.css`) via standard CSS custom properties applied to both the TUI and `tern serve`, with `tern theme init|check|path|reset` and automatic schema/missing-token warnings across updates.
+- **TUI Changelog popup**: scrollable `What's New` modal (`/changelog` or `/whatsnew`) that also opens once automatically after upgrading.
+- **TUI drag-to-select & copy**: left-click and drag anywhere in the transcript to highlight and copy text, plus `/copy`, `/mouse` (native terminal selection toggle), and `/tools [compact|expanded|hidden]`.
+- **Mobile-optimized `tern serve`**: responsive mobile header + slide-over `CONTEXT & STATS` drawer, `100dvh` + safe-area insets, `16px` composer input, and touch-friendly controls.
+
+### Changed
+- `tern serve` now binds to `0.0.0.0:7433` by default so devices on your home network can connect immediately (use `--local-only` for `127.0.0.1`).
+- Refined TUI tool calls (`◐`/`✓`/`✗` semantic glyphs, shortened paths, `read` line ranges, `ask_user` question extraction, per-tool click-to-expand), cleaner `▸ Thought` blocks, and sleeker `━`/`─` sidebar gauges.
+
+### Fixed
+- Fixed `TestPathLocker` goroutine-ordering flake in `internal/subagent`.
+
 ## [v0.4.1] - 2026-11-26
 
 ### Changed
@@ -63,6 +79,7 @@ All notable changes to tern are documented here. The format is based on
 - `tern doctor` section headers render in order.
 - All `IsParallelSafe` tools, including task sub-agents, run concurrently.
 
+[v0.5.0]: https://github.com/DeadLaurin/tern/compare/v0.4.1...v0.5.0
 [v0.4.1]: https://github.com/DeadLaurin/tern/compare/v0.4.0...v0.4.1
 [v0.4.0]: https://github.com/DeadLaurin/tern/compare/v0.3.2...v0.4.0
 [v0.3.2]: https://github.com/DeadLaurin/tern/compare/v0.3.1...v0.3.2

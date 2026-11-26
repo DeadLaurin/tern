@@ -99,8 +99,12 @@ func runWithOptions(o runOptions) int {
 			return runStatsCommand(o.Args[1:], o)
 		case "doctor":
 			return runDoctorCommand(o.Args[1:], o)
+		case "plugin", "plugins":
+			return runPluginCommand(o.Args[1:], o)
 		case "ext":
 			return runExtCommand(o.Args[1:], o)
+		case "theme":
+			return runThemeCommand(o.Args[1:], o)
 		case "update":
 			return runUpdateCommand(o.Args[1:], o.Out, o.Err)
 		case "uninstall":
@@ -340,9 +344,8 @@ Usage:
   tern config
   tern stats [--json]
   tern doctor [--json]
-  tern ext [list] [--json]
-  tern ext install <path-or-git-url>
-  tern ext remove <name>
+  tern plugin [list|new|install|remove|guide]
+  tern theme [check|init|path|reset]
   tern undo [n]
   tern log
   tern policy
@@ -374,7 +377,8 @@ Subcommands:
   config                    print the effective configuration
   stats                     show historical usage and activity
   doctor                    diagnose the installation, toolchain and workspace
-  ext                       list, install or remove extensions
+  plugin                    list, scaffold, install, remove or inspect plugins (alias: ext)
+  theme                     manage local CSS design system (~/.config/tern/theme.css)
   undo [n]                  roll back the last n checkpoint turns
   log                       list checkpoint turns for the latest session
   policy                    show the effective permission policy
