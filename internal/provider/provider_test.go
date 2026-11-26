@@ -670,3 +670,37 @@ func assertContentAndDone(t *testing.T, events []StreamEvent, wantContent, wantF
 		t.Fatalf("done event = %+v, want finish %q", done, wantFinish)
 	}
 }
+
+func TestParseSSEStreamNormalizesUsageDetails(t *testing.T) {
+	stream := strings.Join([]string{
+		`data: {"choices":[{"index":0,"delta":{"content":"hi"}}]}`,
+		`data: {"choices":[{"index":0,"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":1000,"completion_tokens":250,"prompt_tokens_details":{"cached_tokens":700},"completion_tokens_details":{"reasoning_tokens":100}}}`,
+		`data: [DONE]`,
+		``,
+	}, "\n")
+
+	ch := make(chan StreamEvent, 16)
+	if err := ParseSSEStream(context.Background(), strings.NewReader(stream), ch); err != nil {
+		t.Fatalf("ParseSSEStream: %v", err)
+	}
+	close(ch)
+
+	var got *Usage
+	for ev := range ch {
+		if ev.Type == EventUsage && ev.Usage != nil {
+			got = ev.Usage
+		}
+	}
+	if got == nil {
+		t.Fatal("missing usage event")
+	}
+	if got.PromptCacheHitTokens != 700 || got.PromptCacheMissTokens != 300 {
+		t.Fatalf("cache hit/miss = %d/%d, want 700/300", got.PromptCacheHitTokens, got.PromptCacheMissTokens)
+	}
+	if got.TotalTokens != 1250 {
+		t.Fatalf("total_tokens = %d, want 1250", got.TotalTokens)
+	}
+	if got.ReasoningTokens != 100 {
+		t.Fatalf("reasoning_tokens = %d, want 100", got.ReasoningTokens)
+	}
+}

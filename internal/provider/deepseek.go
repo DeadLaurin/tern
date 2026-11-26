@@ -443,12 +443,27 @@ func handleSSEChunk(ctx context.Context, out chan<- StreamEvent, chunk sseChunk,
 	}
 
 	if chunk.Usage != nil {
+		hit := chunk.Usage.PromptCacheHitTokens
+		if hit == 0 && chunk.Usage.PromptTokensDetails.CachedTokens > 0 {
+			hit = chunk.Usage.PromptTokensDetails.CachedTokens
+		}
+		miss := chunk.Usage.PromptCacheMissTokens
+		if miss == 0 && chunk.Usage.PromptTokens > 0 {
+			miss = chunk.Usage.PromptTokens - hit
+			if miss < 0 {
+				miss = 0
+			}
+		}
+		total := chunk.Usage.TotalTokens
+		if total == 0 && (chunk.Usage.PromptTokens > 0 || chunk.Usage.CompletionTokens > 0) {
+			total = chunk.Usage.PromptTokens + chunk.Usage.CompletionTokens
+		}
 		usage := &Usage{
 			PromptTokens:          chunk.Usage.PromptTokens,
 			CompletionTokens:      chunk.Usage.CompletionTokens,
-			TotalTokens:           chunk.Usage.TotalTokens,
-			PromptCacheHitTokens:  chunk.Usage.PromptCacheHitTokens,
-			PromptCacheMissTokens: chunk.Usage.PromptCacheMissTokens,
+			TotalTokens:           total,
+			PromptCacheHitTokens:  hit,
+			PromptCacheMissTokens: miss,
 			ReasoningTokens:       chunk.Usage.CompletionTokensDetails.ReasoningTokens,
 		}
 		if logger != nil {
@@ -510,11 +525,14 @@ type sseToolCall struct {
 }
 
 type sseUsage struct {
-	PromptTokens            int `json:"prompt_tokens"`
-	CompletionTokens        int `json:"completion_tokens"`
-	TotalTokens             int `json:"total_tokens"`
-	PromptCacheHitTokens    int `json:"prompt_cache_hit_tokens"`
-	PromptCacheMissTokens   int `json:"prompt_cache_miss_tokens"`
+	PromptTokens          int `json:"prompt_tokens"`
+	CompletionTokens      int `json:"completion_tokens"`
+	TotalTokens           int `json:"total_tokens"`
+	PromptCacheHitTokens  int `json:"prompt_cache_hit_tokens"`
+	PromptCacheMissTokens int `json:"prompt_cache_miss_tokens"`
+	PromptTokensDetails   struct {
+		CachedTokens int `json:"cached_tokens"`
+	} `json:"prompt_tokens_details"`
 	CompletionTokensDetails struct {
 		ReasoningTokens int `json:"reasoning_tokens"`
 	} `json:"completion_tokens_details"`
