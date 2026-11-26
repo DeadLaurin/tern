@@ -101,6 +101,8 @@ func runWithOptions(o runOptions) int {
 			return runDoctorCommand(o.Args[1:], o)
 		case "plugin", "plugins":
 			return runPluginCommand(o.Args[1:], o)
+		case "skill", "skills":
+			return runSkillCommand(o.Args[1:], o)
 		case "ext":
 			return runExtCommand(o.Args[1:], o)
 		case "theme":
@@ -345,6 +347,7 @@ Usage:
   tern stats [--json]
   tern doctor [--json]
   tern plugin [list|new|install|remove|guide]
+  tern skill [list|install|remove]
   tern theme [check|init|path|reset]
   tern undo [n]
   tern log
@@ -378,6 +381,7 @@ Subcommands:
   stats                     show historical usage and activity
   doctor                    diagnose the installation, toolchain and workspace
   plugin                    list, scaffold, install, remove or inspect plugins (alias: ext)
+  skill                     list, pull/install from GitHub/URL, or remove skills
   theme                     manage local CSS design system (~/.config/tern/theme.css)
   undo [n]                  roll back the last n checkpoint turns
   log                       list checkpoint turns for the latest session

@@ -38,11 +38,15 @@ type skillCandidate struct {
 	priority int // higher wins when two files in one root resolve to one name
 }
 
-// ListSkills discovers skills in the global and project skill directories.
+// ListSkills discovers skills in the global and project skill directories,
+// including automatic detection of Claude (.claude/skills) and Agent Skills
+// (.agents/skills) directories.
 //
-// Both "<dir>/<name>.md" and "<dir>/<name>/SKILL.md" layouts are supported.
-// Project skills override global skills with the same name. The result is
-// sorted by name.
+// Both "<dir>/<name>.md" and "<dir>/<name>/SKILL.md" layouts (including
+// symlinked skill folders) are supported. Project skills override global
+// skills with the same name, and tern-specific directories take precedence
+// over Claude/Agent directories within the same scope. The result is sorted by
+// name.
 func ListSkills(workDir, globalConfigDir string) ([]SkillMeta, error) {
 	workDir, err := resolveDir(workDir)
 	if err != nil {
@@ -51,28 +55,44 @@ func ListSkills(workDir, globalConfigDir string) ([]SkillMeta, error) {
 
 	merged := make(map[string]skillCandidate)
 
+	mergeRoot := func(dir, scope string) error {
+		found, err := discoverSkills(dir)
+		if err != nil {
+			return err
+		}
+		for name, candidate := range found {
+			candidate.meta.Scope = scope
+			merged[name] = candidate
+		}
+		return nil
+	}
+
 	if strings.TrimSpace(globalConfigDir) != "" {
 		globalDir, err := resolveDir(globalConfigDir)
 		if err != nil {
 			return nil, err
 		}
-		globalSkills, err := discoverSkills(filepath.Join(globalDir, "skills"))
-		if err != nil {
-			return nil, err
+		if home, herr := os.UserHomeDir(); herr == nil && isPathInside(globalDir, home) {
+			if err := mergeRoot(filepath.Join(home, ".agents", "skills"), ScopeGlobal); err != nil {
+				return nil, err
+			}
+			if err := mergeRoot(filepath.Join(home, ".claude", "skills"), ScopeGlobal); err != nil {
+				return nil, err
+			}
 		}
-		for name, candidate := range globalSkills {
-			candidate.meta.Scope = ScopeGlobal
-			merged[name] = candidate
+		if err := mergeRoot(filepath.Join(globalDir, "skills"), ScopeGlobal); err != nil {
+			return nil, err
 		}
 	}
 
-	projectSkills, err := discoverSkills(filepath.Join(workDir, ".tern", "skills"))
-	if err != nil {
-		return nil, err
-	}
-	for name, candidate := range projectSkills {
-		candidate.meta.Scope = ScopeProject
-		merged[name] = candidate
+	for _, rel := range []string{
+		filepath.Join(".agents", "skills"),
+		filepath.Join(".claude", "skills"),
+		filepath.Join(".tern", "skills"),
+	} {
+		if err := mergeRoot(filepath.Join(workDir, rel), ScopeProject); err != nil {
+			return nil, err
+		}
 	}
 
 	names := make([]string, 0, len(merged))
@@ -148,7 +168,13 @@ func discoverSkills(dir string) (map[string]skillCandidate, error) {
 			priority int
 			isDir    bool
 		)
-		if entry.IsDir() {
+		isDirEntry := entry.IsDir()
+		if !isDirEntry && entry.Type()&os.ModeSymlink != 0 {
+			if st, statErr := os.Stat(filepath.Join(dir, entryName)); statErr == nil && st.IsDir() {
+				isDirEntry = true
+			}
+		}
+		if isDirEntry {
 			isDir = true
 			path = filepath.Join(dir, entryName, "SKILL.md")
 			info, err := os.Stat(path)

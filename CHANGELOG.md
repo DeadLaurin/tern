@@ -4,6 +4,12 @@ All notable changes to tern are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and tern adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v0.5.1] - 2026-11-26
+
+### Added
+- Automatic discovery of Claude (`.claude/skills`) and Agent Skills (`.agents/skills`) directories globally and per-project, including symlinked skill folders.
+- `tern skill [list|install|remove]` to pull and manage skills from GitHub browser URLs (`/tree/...`, `/blob/...`), `owner/repo[/subdir]` shorthands, direct raw `SKILL.md` URLs, or local paths.
+
 ## [v0.5.0] - 2026-11-26
 
 ### Added
@@ -79,6 +85,7 @@ All notable changes to tern are documented here. The format is based on
 - `tern doctor` section headers render in order.
 - All `IsParallelSafe` tools, including task sub-agents, run concurrently.
 
+[v0.5.1]: https://github.com/DeadLaurin/tern/compare/v0.5.0...v0.5.1
 [v0.5.0]: https://github.com/DeadLaurin/tern/compare/v0.4.1...v0.5.0
 [v0.4.1]: https://github.com/DeadLaurin/tern/compare/v0.4.0...v0.4.1
 [v0.4.0]: https://github.com/DeadLaurin/tern/compare/v0.3.2...v0.4.0

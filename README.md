@@ -95,6 +95,7 @@ tern --rpc
 | `tern serve` | Start the minimalist LAN web UI (`0.0.0.0:7433`, `--password`, `--local-only`) |
 | `tern acp` | Serve Agent Client Protocol (ACP) over stdio for ACP hosts with usage stats |
 | `tern plugin` | List, scaffold (`new`), install, remove, or print the AI `guide` for plugins |
+| `tern skill` | List, pull from GitHub/URL (`install`), or remove Claude / Agent Skills |
 | `tern theme` | Manage your local CSS design system (`~/.config/tern/theme.css`) |
 | `tern doctor` | Check environment, API key status, toolchain (`rg`, `git`), and workspace |
 | `tern stats` | Show token usage, cache hit rate, and estimated cost |
