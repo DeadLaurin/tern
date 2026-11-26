@@ -180,12 +180,14 @@ type Model struct {
 	liveSpeed   float64
 	lastSpeed   float64
 
-	usage        provider.Usage
-	totalCost    float64
-	cache        float64
-	ctxTokens    int
-	ctxWindow    int
-	historyChars int
+	usage         provider.Usage
+	totalCost     float64
+	cache         float64
+	ctxTokens     int
+	baseCtxTokens int
+	streamChars   int
+	ctxWindow     int
+	historyChars  int
 
 	quitArmed bool
 	quitAt    time.Time
@@ -874,7 +876,7 @@ func (m *Model) startTurn(text string, attachments []provider.ContentPart) tea.C
 	m.lastSpeed = 0
 	m.turnAutoApprove = false
 	m.statusMsg = "Thinking…"
-	m.ctxTokens += len(text) / 4
+	m.addStreamContextChars(len(text))
 
 	m.entries = append(m.entries, &transcriptEntry{kind: entryUser, text: text})
 	if len(attachments) > 0 {
@@ -903,9 +905,9 @@ func (m *Model) handleTurnDone(msg turnDoneMsg) {
 		m.totalCost = msg.result.TotalCostUSD
 		m.cache = msg.result.CacheHitRate
 		if msg.result.ContextTokens > 0 {
-			m.ctxTokens = msg.result.ContextTokens
+			m.setContextTokens(msg.result.ContextTokens)
 		} else if m.opts.Agent != nil {
-			m.ctxTokens = m.opts.Agent.ContextTokens()
+			m.setContextTokens(m.opts.Agent.ContextTokens())
 		}
 		if m.acceptSpeed(msg.result.TokensPerSec) {
 			m.liveSpeed = msg.result.TokensPerSec
@@ -973,11 +975,11 @@ func (m *Model) handleAgentEvent(ev agent.Event) {
 
 	case agent.EventReasoningDelta:
 		m.pendingReasoning += ev.Text
-		m.ctxTokens += len(ev.Text) / 4
+		m.addStreamContextChars(len(ev.Text))
 
 	case agent.EventTextDelta:
 		m.pendingText += ev.Text
-		m.ctxTokens += len(ev.Text) / 4
+		m.addStreamContextChars(len(ev.Text))
 		m.noteOutputStream(ev.Text)
 
 	case agent.EventToolStart:
@@ -1025,7 +1027,7 @@ func (m *Model) handleAgentEvent(ev agent.Event) {
 		entry.elapsed = time.Duration(ev.DurationMS) * time.Millisecond
 		entry.finished = true
 		m.usingTools = false
-		m.ctxTokens += len(ev.Output) / 4
+		m.addStreamContextChars(len(ev.Output))
 		m.statusMsg = "Thinking…"
 		m.dirty = true
 
@@ -1033,18 +1035,21 @@ func (m *Model) handleAgentEvent(ev agent.Event) {
 		if ev.Usage != nil {
 			m.usage = addUsage(m.usage, *ev.Usage)
 			if ev.ContextTokens > 0 {
-				m.ctxTokens = ev.ContextTokens
+				m.setContextTokens(ev.ContextTokens)
 			} else if ev.Usage.PromptTokens > 0 {
-				m.ctxTokens = ev.Usage.PromptTokens
+				m.setContextTokens(ev.Usage.PromptTokens + ev.Usage.CompletionTokens)
 			}
-		} else if ev.ContextTokens > 0 {
-			m.ctxTokens = ev.ContextTokens
+			m.cache = ev.CacheHitRate
+		} else {
+			if ev.ContextTokens > 0 {
+				m.setContextTokens(ev.ContextTokens)
+			}
+			if ev.CacheHitRate > 0 {
+				m.cache = ev.CacheHitRate
+			}
 		}
 		if ev.TotalCostUSD > 0 {
 			m.totalCost = ev.TotalCostUSD
-		}
-		if ev.CacheHitRate > 0 {
-			m.cache = ev.CacheHitRate
 		}
 		if m.acceptSpeed(ev.TokensPerSec) {
 			m.liveSpeed = ev.TokensPerSec
@@ -1058,11 +1063,11 @@ func (m *Model) handleAgentEvent(ev agent.Event) {
 		if ev.TotalCostUSD > 0 {
 			m.totalCost = ev.TotalCostUSD
 		}
-		if ev.CacheHitRate > 0 {
+		if ev.Usage != nil || ev.CacheHitRate > 0 {
 			m.cache = ev.CacheHitRate
 		}
 		if ev.ContextTokens > 0 {
-			m.ctxTokens = ev.ContextTokens
+			m.setContextTokens(ev.ContextTokens)
 		}
 		if m.acceptSpeed(ev.TokensPerSec) {
 			m.liveSpeed = ev.TokensPerSec
@@ -1074,12 +1079,13 @@ func (m *Model) handleAgentEvent(ev agent.Event) {
 
 	case agent.EventCompact:
 		m.historyChars = 0
+		m.cache = 0
 		if ev.ContextTokens > 0 {
-			m.ctxTokens = ev.ContextTokens
+			m.setContextTokens(ev.ContextTokens)
 		} else if m.opts.Agent != nil {
-			m.ctxTokens = m.opts.Agent.ContextTokens()
+			m.setContextTokens(m.opts.Agent.ContextTokens())
 		} else {
-			m.ctxTokens = 0
+			m.setContextTokens(0)
 		}
 		if ev.Compact != nil {
 			m.addInfo(fmt.Sprintf("⟳ Context compacted: %d → %d messages (%s) · cache prefix reset.",
@@ -1517,6 +1523,23 @@ func (m *Model) rebuildContent() {
 	}
 }
 
+func (m *Model) setContextTokens(tokens int) {
+	if tokens < 0 {
+		tokens = 0
+	}
+	m.baseCtxTokens = tokens
+	m.streamChars = 0
+	m.ctxTokens = tokens
+}
+
+func (m *Model) addStreamContextChars(n int) {
+	if n <= 0 {
+		return
+	}
+	m.streamChars += n
+	m.ctxTokens = m.baseCtxTokens + m.streamChars/4
+}
+
 func (m *Model) computeContextTokens() {
 	if m.ctxTokens > 0 || m.opts.Agent != nil {
 		return
@@ -1525,7 +1548,7 @@ func (m *Model) computeContextTokens() {
 	for _, entry := range m.entries {
 		chars += len(entry.text) + len(entry.output)
 	}
-	m.ctxTokens = chars / 4
+	m.setContextTokens(chars / 4)
 }
 
 func (m *Model) renderTranscript() string {
@@ -1865,7 +1888,7 @@ func (m *Model) noteOutputStream(text string) {
 	if seconds < 0.2 {
 		seconds = 0.2
 	}
-	m.liveSpeed = float64(m.outputRunes/4) / seconds
+	m.liveSpeed = (float64(m.outputRunes) / 4.0) / seconds
 }
 
 // acceptSpeed filters absurd sub-burst provider values. A tiny buffered

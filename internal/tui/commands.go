@@ -509,8 +509,10 @@ func (m *Model) contextText() string {
 	if !m.running && m.opts.Agent != nil {
 		history := m.opts.Agent.History()
 		messages = len(history)
-		if chars := historyChars(history); chars/4 > tokens {
-			tokens = chars / 4
+		if len(history) > 0 {
+			if actual := m.opts.Agent.ContextTokens(); actual > 0 {
+				tokens = actual
+			}
 		}
 	}
 	window := m.ctxWindow
@@ -518,7 +520,11 @@ func (m *Model) contextText() string {
 		window = 1_000_000
 	}
 	pct := float64(tokens) / float64(window) * 100
-	return fmt.Sprintf("Context: ~%d / %d tokens (%.1f%%) · %d active messages", tokens, window, pct, messages)
+	prefix := "~"
+	if m.usage.PromptTokens > 0 && m.streamChars == 0 {
+		prefix = ""
+	}
+	return fmt.Sprintf("Context: %s%d / %d tokens (%.1f%%) · %d active messages", prefix, tokens, window, pct, messages)
 }
 
 func (m *Model) cmdUndo() tea.Cmd {

@@ -164,6 +164,10 @@ func (m *Model) sidebarContext(width int) string {
 		lines = append(lines, m.st.paint(m.st.dim, truncateCell("branch "+branch, width)))
 	}
 
+	barWidth := 12
+	if width < 36 {
+		barWidth = 10
+	}
 	ctxPct := 0
 	if m.ctxWindow > 0 && m.ctxTokens > 0 {
 		ctxPct = clampInt(int(float64(m.ctxTokens)/float64(m.ctxWindow)*100+0.5), 0, 100)
@@ -172,13 +176,13 @@ func (m *Model) sidebarContext(width int) string {
 	if m.ctxWindow > 0 && m.ctxTokens > 0 {
 		ctxSuffix = fmt.Sprintf("%s/%s", compactTokens(m.ctxTokens), compactTokens(m.ctxWindow))
 	}
-	lines = append(lines, m.sidebarGauge("Ctx", ctxPct, 12, ctxSuffix))
+	lines = append(lines, m.sidebarGauge("Ctx", ctxPct, barWidth, ctxSuffix))
 
 	cachePct := 0
 	if m.cache > 0 {
 		cachePct = clampInt(int(m.cache*100+0.5), 0, 100)
 	}
-	lines = append(lines, m.sidebarGauge("Cache", cachePct, 12, ""))
+	lines = append(lines, m.sidebarGauge("Cache", cachePct, barWidth, ""))
 
 	stats := make([]string, 0, 3)
 	if speed := m.speed(); speed > 0 {
@@ -208,7 +212,7 @@ func (m *Model) sidebarGauge(label string, pct, barWidth int, suffix string) str
 	}
 	line := fmt.Sprintf("%-5s %s %3d%%", label, bar, pct)
 	if suffix != "" {
-		line += "  " + suffix
+		line += " " + suffix
 	}
 	return truncateAnsi(line, m.sidebarWidth())
 }

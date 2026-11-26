@@ -813,7 +813,11 @@ func (m *Model) rebuildTranscriptFromSession(sess *session.Session) {
 		}
 	}
 	m.historyChars = historyChars(msgs)
-	m.ctxTokens = m.historyChars / 4
+	if m.opts.Agent != nil && len(msgs) > 0 {
+		m.setContextTokens(m.opts.Agent.ContextTokens())
+	} else {
+		m.setContextTokens(m.historyChars / 4)
+	}
 	m.followTail = true
 	m.dirty = true
 }

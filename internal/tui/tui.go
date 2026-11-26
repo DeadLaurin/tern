@@ -140,8 +140,11 @@ func New(opts Options) *Model {
 		m.opts.Agent.OnAskUser = m.askUser
 		m.usage, m.totalCost = m.opts.Agent.TotalUsage()
 		m.cache = cacheRate(m.usage)
-		m.historyChars = historyChars(m.opts.Agent.History())
-		m.ctxTokens = m.historyChars / 4
+		history := m.opts.Agent.History()
+		m.historyChars = historyChars(history)
+		if len(history) > 0 {
+			m.setContextTokens(m.opts.Agent.ContextTokens())
+		}
 	}
 	if m.opts.Subagent != nil {
 		m.syncAgents()
@@ -212,6 +215,9 @@ func normalizeOptions(opts Options) Options {
 
 func cacheRate(u provider.Usage) float64 {
 	total := u.PromptCacheHitTokens + u.PromptCacheMissTokens
+	if total <= 0 {
+		total = u.PromptTokens
+	}
 	if total <= 0 {
 		return 0
 	}

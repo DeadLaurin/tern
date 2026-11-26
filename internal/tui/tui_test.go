@@ -2458,3 +2458,53 @@ func TestThemeHonorsNoColor(t *testing.T) {
 		}
 	}
 }
+
+func TestStreamingTinyDeltasAccumulateContextTokensAndResetCache(t *testing.T) {
+	m := newTestModel(t, Options{})
+	m.width = 120
+	m.height = 40
+
+	// 40 tiny 2-byte SSE deltas = 80 bytes = 20 estimated tokens.
+	// Previously len("ab")/4 == 0 dropped every single delta.
+	for i := 0; i < 40; i++ {
+		m.Update(agentEventMsg{event: agent.Event{Type: agent.EventTextDelta, Text: "ab"}})
+	}
+	if m.ctxTokens != 20 {
+		t.Fatalf("ctxTokens after 40x2-byte deltas = %d, want 20", m.ctxTokens)
+	}
+
+	// Authoritative usage snaps ctxTokens and sets cache hit rate.
+	m.Update(agentEventMsg{event: agent.Event{
+		Type:          agent.EventUsage,
+		Usage:         &provider.Usage{PromptTokens: 4000, CompletionTokens: 200, PromptCacheHitTokens: 3000, PromptCacheMissTokens: 1000},
+		ContextTokens: 4200,
+		CacheHitRate:  0.75,
+	}})
+	if m.ctxTokens != 4200 {
+		t.Fatalf("ctxTokens after usage = %d, want 4200", m.ctxTokens)
+	}
+	if m.cache != 0.75 {
+		t.Fatalf("cache after usage = %v, want 0.75", m.cache)
+	}
+
+	// Zero cache hit rate on a subsequent usage event must update m.cache to 0.
+	m.Update(agentEventMsg{event: agent.Event{
+		Type:          agent.EventUsage,
+		Usage:         &provider.Usage{PromptTokens: 4500, CompletionTokens: 100, PromptCacheHitTokens: 0, PromptCacheMissTokens: 4500},
+		ContextTokens: 4600,
+		CacheHitRate:  0,
+	}})
+	if m.cache != 0 {
+		t.Fatalf("cache after 0-hit usage = %v, want 0", m.cache)
+	}
+
+	// Compaction resets cache and snaps ctxTokens to compacted size.
+	m.cache = 0.8
+	m.Update(agentEventMsg{event: agent.Event{
+		Type:          agent.EventCompact,
+		ContextTokens: 900,
+	}})
+	if m.ctxTokens != 900 || m.cache != 0 {
+		t.Fatalf("after compact: ctxTokens=%d cache=%v, want 900 and 0", m.ctxTokens, m.cache)
+	}
+}
