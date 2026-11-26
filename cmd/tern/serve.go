@@ -28,6 +28,7 @@ type serveOptions struct {
 	Host       string
 	Port       int
 	LAN        bool
+	LocalOnly  bool
 	Password   string
 	Auth       bool
 	NoAuth     bool
@@ -48,9 +49,10 @@ Usage:
   tern serve [flags]
 
 Flags:
-      --host <addr>         bind address (default 127.0.0.1)
+      --host <addr>         bind address (default 0.0.0.0 — local + LAN)
       --port <n>            HTTP port (default 7433)
-      --lan                 shorthand for --host 0.0.0.0
+      --lan                 bind to 0.0.0.0 (default)
+      --local-only          shorthand for --host 127.0.0.1
       --password <pw>       optional login password (or set TERN_SERVE_PASSWORD)
       --auth                generate a random login password automatically
       --no-auth             disable login password even if TERN_SERVE_PASSWORD is set
@@ -63,12 +65,13 @@ Flags:
 }
 
 func parseServeArgs(args []string) (*serveOptions, error) {
-	opts := &serveOptions{Host: "127.0.0.1", Port: defaultServePort}
+	opts := &serveOptions{Host: "0.0.0.0", Port: defaultServePort}
 	fs := flag.NewFlagSet("tern serve", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	fs.StringVar(&opts.Host, "host", opts.Host, "bind address")
 	fs.IntVar(&opts.Port, "port", opts.Port, "HTTP port")
 	fs.BoolVar(&opts.LAN, "lan", false, "bind to 0.0.0.0")
+	fs.BoolVar(&opts.LocalOnly, "local-only", false, "bind to 127.0.0.1 only")
 	fs.StringVar(&opts.Password, "password", "", "optional login password")
 	fs.BoolVar(&opts.Auth, "auth", false, "generate a random login password")
 	fs.BoolVar(&opts.NoAuth, "no-auth", false, "disable login password")
@@ -91,7 +94,9 @@ func parseServeArgs(args []string) (*serveOptions, error) {
 	fs.Visit(func(f *flag.Flag) { visited[f.Name] = true })
 	opts.ModelSet = visited["model"]
 	opts.PermSet = visited["permission"]
-	if opts.LAN {
+	if opts.LocalOnly {
+		opts.Host = "127.0.0.1"
+	} else if opts.LAN {
 		opts.Host = "0.0.0.0"
 	}
 	if opts.Port < 0 || opts.Port > 65535 {
@@ -239,9 +244,10 @@ func runServeCommand(args []string, o runOptions) int {
 		Store:       rt.SessionStore,
 		Config:      cfg,
 		Permissions: rt.Permissions,
-		Version:     o.Version,
-		WorkDir:     workDir,
-		Password:    password,
+		Version:         o.Version,
+		WorkDir:         workDir,
+		GlobalConfigDir: configDir,
+		Password:        password,
 		AuthEnabled: authEnabled,
 	})
 	defer srv.Close()

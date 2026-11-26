@@ -1342,3 +1342,20 @@ func TestVersionCommandUpdateCheck(t *testing.T) {
 		t.Fatal("isNewerVersion semver comparison failed")
 	}
 }
+
+func TestServeDefaultsToAllInterfacesAndLocalOnlyFlag(t *testing.T) {
+	opts, err := parseServeArgs(nil)
+	if err != nil {
+		t.Fatalf("parseServeArgs(nil): %v", err)
+	}
+	if opts.Host != "0.0.0.0" {
+		t.Fatalf("default serve host = %q, want 0.0.0.0", opts.Host)
+	}
+	localOpts, err := parseServeArgs([]string{"--local-only"})
+	if err != nil {
+		t.Fatalf("parseServeArgs(--local-only): %v", err)
+	}
+	if localOpts.Host != "127.0.0.1" {
+		t.Fatalf("--local-only host = %q, want 127.0.0.1", localOpts.Host)
+	}
+}

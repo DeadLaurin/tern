@@ -24,6 +24,7 @@
     margin: 0;
     padding: 0;
     height: 100%;
+    height: 100dvh;
     background: var(--bg);
     color: var(--text);
     font-family: var(--mono);
@@ -453,11 +454,85 @@
   }
   .sb-logout:hover { color: var(--text); border-color: var(--muted); }
 
+  /* ---------- mobile header & slide-over drawer ---------- */
+  .mobile-bar {
+    display: none;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    padding: max(8px, env(safe-area-inset-top)) 12px 8px;
+    border-bottom: 1px solid var(--border);
+    flex: none;
+  }
+  .mob-brand { font-weight: 600; white-space: nowrap; }
+  .mob-ver { color: var(--dim); font-weight: 400; margin-left: 4px; font-size: 0.9em; }
+  .mob-meta { color: var(--dim); font-size: 0.85em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .mob-menu-btn {
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 4px 10px;
+    color: var(--muted);
+    min-height: 34px;
+    min-width: 38px;
+    flex: none;
+  }
+  .mob-menu-btn:hover { color: var(--text); border-color: var(--muted); }
+  .drawer-backdrop {
+    display: none;
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.55);
+    z-index: 20;
+  }
+  .sb-close {
+    display: none;
+    align-self: flex-end;
+    color: var(--dim);
+    border: 1px solid var(--border);
+    border-radius: 5px;
+    padding: 2px 9px;
+    margin-bottom: 4px;
+  }
+
   @media (max-width: 900px) {
-    .pane-divider, .pane-sidebar { display: none; }
-    .pane-main { padding: 10px 12px 6px; }
+    #app { flex-direction: column; }
+    .mobile-bar { display: flex; }
+    .pane-divider { display: none; }
+    .pane-main {
+      padding: 8px 12px max(8px, env(safe-area-inset-bottom));
+      min-height: 0;
+    }
+    .pane-sidebar {
+      display: flex;
+      position: fixed;
+      top: 0;
+      right: 0;
+      bottom: 0;
+      width: min(86vw, 320px);
+      background: var(--bg);
+      border-left: 1px solid var(--border);
+      z-index: 30;
+      padding: max(14px, env(safe-area-inset-top)) 16px max(16px, env(safe-area-inset-bottom));
+      transform: translateX(100%);
+      transition: transform 0.18s ease-out;
+    }
+    #app.drawer-open .pane-sidebar { transform: translateX(0); }
+    #app.drawer-open .drawer-backdrop { display: block; }
+    #app.sidebar-hidden .pane-sidebar { display: flex; }
+    .sb-close { display: inline-block; }
+    #input { font-size: 16px; line-height: 1.45; }
+    .composer-box { padding: 9px 10px; }
+    .composer-mini { min-height: 36px; min-width: 36px; padding: 4px 10px; }
+    .cli-btn { min-height: 40px; padding: 6px 14px; }
+    .slash-row { padding: 7px 6px; }
+    .status-bar { font-size: 0.82em; margin-top: 5px; }
+    .emblem { font-size: 8px; }
+  }
+  @media (max-width: 420px) {
+    .emblem { font-size: 6.5px; }
   }
 </style>
+<link rel="stylesheet" href="/theme.css">
 </head>
 <body>
 
@@ -482,6 +557,13 @@
 </div>
 
 <div id="app" class="hidden">
+  <div class="mobile-bar">
+    <div class="mob-brand">tern<span class="mob-ver" id="mobVer"></span></div>
+    <div class="mob-meta" id="mobMeta">0% · $0.000</div>
+    <button class="mob-menu-btn" id="mobMenuBtn" type="button" aria-label="Stats &amp; settings">☰</button>
+  </div>
+  <div class="drawer-backdrop" id="drawerBackdrop"></div>
+
   <section class="pane-main">
     <div id="transcript">
       <div class="welcome" id="welcome">
@@ -538,6 +620,7 @@
   <div class="pane-divider"></div>
 
   <aside class="pane-sidebar">
+    <button class="sb-close" id="sbClose" type="button">✕ close</button>
     <div>
       <div class="sb-head">CONTEXT &amp; STATS</div>
       <div class="sb-model" id="sbModel">deepseek-flash · high</div>
@@ -635,7 +718,12 @@
     model: document.getElementById("model"),
     effort: document.getElementById("effort"),
     perm: document.getElementById("perm"),
-    logout: document.getElementById("logout")
+    logout: document.getElementById("logout"),
+    mobVer: document.getElementById("mobVer"),
+    mobMeta: document.getElementById("mobMeta"),
+    mobMenuBtn: document.getElementById("mobMenuBtn"),
+    drawerBackdrop: document.getElementById("drawerBackdrop"),
+    sbClose: document.getElementById("sbClose")
   };
 
   var state = {
@@ -791,6 +879,7 @@
     el.wDir.textContent = st.work_dir || "";
     el.sbModel.textContent = modelLine;
     el.sbVer.textContent = "tern " + ver;
+    el.mobVer.textContent = ver;
     el.sbDir.textContent = st.work_dir ? shortPath(st.work_dir) : "";
 
     fillModels(st.model);
@@ -856,6 +945,7 @@
     if (st.total_cost_usd > 0) { parts.push("$" + st.total_cost_usd.toFixed(3)); }
     parts.push(compactDuration(st.uptime_sec || 0));
     el.sbStats.textContent = parts.join(" · ");
+    el.mobMeta.textContent = "Ctx " + pct + "% · $" + (st.total_cost_usd || 0).toFixed(3);
   }
 
   function renderStatusBar(st) {
@@ -947,9 +1037,19 @@
   /* ---------------- sidebar & status actions ---------------- */
 
   function toggleSidebar() {
+    if (window.innerWidth <= 900) {
+      el.app.classList.toggle("drawer-open");
+      return;
+    }
     el.app.classList.toggle("sidebar-hidden");
     el.input.focus();
   }
+  function closeDrawer() {
+    el.app.classList.remove("drawer-open");
+  }
+  el.mobMenuBtn.addEventListener("click", function () { el.app.classList.toggle("drawer-open"); });
+  el.drawerBackdrop.addEventListener("click", closeDrawer);
+  el.sbClose.addEventListener("click", closeDrawer);
 
   function cycleModel() {
     var idx = MODELS.indexOf(state.status.model);

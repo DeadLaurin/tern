@@ -24,6 +24,7 @@ import (
 	"github.com/tern-agent/tern/internal/permission"
 	"github.com/tern-agent/tern/internal/provider"
 	"github.com/tern-agent/tern/internal/session"
+	"github.com/tern-agent/tern/internal/theme"
 )
 
 //go:embed ui.html
@@ -44,8 +45,9 @@ type Options struct {
 	// Permissions is tern's permission evaluator. (There is no
 	// permission.Manager type in this codebase.)
 	Permissions *permission.Evaluator
-	Version     string
-	WorkDir     string
+	Version         string
+	WorkDir         string
+	GlobalConfigDir string
 	// Password enables password authentication when non-empty.
 	Password string
 	// AuthEnabled forces authentication on or off. When Password is set,
@@ -60,10 +62,11 @@ type Server struct {
 	Store       *session.Store
 	Config      *config.Config
 	Permissions *permission.Evaluator
-	Version     string
-	WorkDir     string
-	Password    string
-	AuthEnabled bool
+	Version         string
+	WorkDir         string
+	GlobalConfigDir string
+	Password        string
+	AuthEnabled     bool
 
 	auth   *authManager
 	ctx    context.Context
@@ -130,9 +133,10 @@ func New(opts Options) *Server {
 		Store:       opts.Store,
 		Config:      opts.Config,
 		Permissions: opts.Permissions,
-		Version:     opts.Version,
-		WorkDir:     opts.WorkDir,
-		Password:    opts.Password,
+		Version:         opts.Version,
+		WorkDir:         opts.WorkDir,
+		GlobalConfigDir: opts.GlobalConfigDir,
+		Password:        opts.Password,
 		AuthEnabled: opts.AuthEnabled || strings.TrimSpace(opts.Password) != "",
 
 		auth:      newAuthManager(opts.Password, opts.AuthEnabled || strings.TrimSpace(opts.Password) != ""),
@@ -196,6 +200,7 @@ func (s *Server) Close() {
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", s.handleIndex)
+	mux.HandleFunc("/theme.css", s.handleThemeCSS)
 	mux.HandleFunc("/api/auth/status", s.handleAuthStatus)
 	mux.HandleFunc("/api/login", s.handleLogin)
 	mux.HandleFunc("/api/logout", s.handleLogout)
@@ -227,6 +232,20 @@ func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-cache")
 	_, _ = w.Write(uiHTML)
+}
+
+func (s *Server) handleThemeCSS(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet && r.Method != http.MethodHead {
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	w.Header().Set("Content-Type", "text/css; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-cache")
+	loaded, err := theme.Load(s.WorkDir, s.GlobalConfigDir)
+	if err != nil || loaded == nil || !loaded.HasCustom() {
+		return
+	}
+	_, _ = io.WriteString(w, loaded.RawCSS)
 }
 
 // ---------------------------------------------------------------------------
