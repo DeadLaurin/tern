@@ -1291,3 +1291,54 @@ func TestDoctorCommandTextAndJSON(t *testing.T) {
 		t.Fatalf("doctor local JSON leaked the API key:\n%s", localOut.String())
 	}
 }
+
+func TestVersionCommandUpdateCheck(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"tag_name":"v0.4.0"}`))
+	}))
+	defer srv.Close()
+
+	oldBase := githubAPIBase
+	githubAPIBase = srv.URL
+	t.Cleanup(func() { githubAPIBase = oldBase })
+
+	// Older version reports update available.
+	o := testRunOptions(t)
+	o.Version = "v0.3.1"
+	o.Args = []string{"version"}
+	if code := runWithOptions(o); code != 0 {
+		t.Fatalf("tern version exit = %d", code)
+	}
+	out := o.Out.(*bytes.Buffer).String()
+	if !strings.Contains(out, "tern v0.3.1") || !strings.Contains(out, "Update available: v0.4.0") {
+		t.Fatalf("unexpected tern version output:\n%s", out)
+	}
+
+	// Matching version reports up to date.
+	o2 := testRunOptions(t)
+	o2.Version = "v0.4.0"
+	o2.Args = []string{"version"}
+	if code := runWithOptions(o2); code != 0 {
+		t.Fatalf("tern version (up to date) exit = %d", code)
+	}
+	out2 := o2.Out.(*bytes.Buffer).String()
+	if !strings.Contains(out2, "tern v0.4.0") || !strings.Contains(out2, "Up to date (v0.4.0)") {
+		t.Fatalf("unexpected up-to-date output:\n%s", out2)
+	}
+
+	// --no-check skips the network check.
+	o3 := testRunOptions(t)
+	o3.Version = "v0.3.1"
+	o3.Args = []string{"version", "--no-check"}
+	if code := runWithOptions(o3); code != 0 {
+		t.Fatalf("tern version --no-check exit = %d", code)
+	}
+	if got := o3.Out.(*bytes.Buffer).String(); got != "tern v0.3.1\n" {
+		t.Fatalf("tern version --no-check = %q, want %q", got, "tern v0.3.1\n")
+	}
+
+	if !isNewerVersion("v0.4.0", "v0.3.1") || isNewerVersion("v0.3.1", "v0.3.1") || isNewerVersion("v0.3.0", "v0.3.1") || isNewerVersion("v0.4.0", "dev") {
+		t.Fatal("isNewerVersion semver comparison failed")
+	}
+}

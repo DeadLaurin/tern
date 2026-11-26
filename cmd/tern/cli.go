@@ -92,8 +92,7 @@ func runWithOptions(o runOptions) int {
 	if len(o.Args) > 0 {
 		switch o.Args[0] {
 		case "version":
-			fmt.Fprintf(o.Out, "tern %s\n", o.Version)
-			return 0
+			return runVersionCommand(o.Args[1:], o)
 		case "config":
 			return runConfigCommand(o.Args[1:], o)
 		case "stats":
@@ -256,6 +255,13 @@ func runWithOptions(o runOptions) int {
 	case promptMode:
 		return runPrint(ctx, rt, prompt, o.Out, o.Err)
 	default:
+		var updateChecker func(context.Context) (string, bool, error)
+		if _, ok := parseSemver(o.Version); ok && !opts.Local {
+			curVer := o.Version
+			updateChecker = func(c context.Context) (string, bool, error) {
+				return checkUpdateQuick(c, curVer)
+			}
+		}
 		err := tui.Run(ctx, tui.Options{
 			Config:          cfg,
 			Agent:           rt.Agent,
@@ -268,6 +274,7 @@ func runWithOptions(o runOptions) int {
 			WorkDir:         workDir,
 			GlobalConfigDir: configDir,
 			Version:         o.Version,
+			CheckUpdate:     updateChecker,
 			NoColor:         noColor(),
 		})
 		if err != nil && !errors.Is(err, context.Canceled) {

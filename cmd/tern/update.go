@@ -198,6 +198,106 @@ func normalizeVersion(v string) string {
 	return v
 }
 
+// isNewerVersion reports whether latest is strictly newer than current using
+// major.minor.patch comparison. Non-semver current versions (such as "dev" or
+// "test") return false so passive update checks never nag local builds.
+func isNewerVersion(latest, current string) bool {
+	lParts, lOK := parseSemver(latest)
+	cParts, cOK := parseSemver(current)
+	if !lOK || !cOK {
+		return false
+	}
+	for i := 0; i < 3; i++ {
+		if lParts[i] != cParts[i] {
+			return lParts[i] > cParts[i]
+		}
+	}
+	return false
+}
+
+func parseSemver(v string) ([3]int, bool) {
+	var parts [3]int
+	v = normalizeVersion(v)
+	if idx := strings.IndexAny(v, "-+"); idx >= 0 {
+		v = v[:idx]
+	}
+	segs := strings.Split(v, ".")
+	if len(segs) != 3 {
+		return parts, false
+	}
+	for i, s := range segs {
+		if s == "" {
+			return parts, false
+		}
+		n := 0
+		for _, ch := range s {
+			if ch < '0' || ch > '9' {
+				return parts, false
+			}
+			n = n*10 + int(ch-'0')
+		}
+		parts[i] = n
+	}
+	return parts, true
+}
+
+func checkUpdateQuick(ctx context.Context, currentVersion string) (string, bool, error) {
+	if _, ok := parseSemver(currentVersion); !ok {
+		return "", false, nil
+	}
+	repo := strings.TrimSpace(os.Getenv("TERN_UPDATE_REPO"))
+	if repo == "" {
+		repo = defaultUpdateRepo
+	}
+	client := &http.Client{Timeout: 2500 * time.Millisecond}
+	tag, err := latestTag(ctx, client, githubAPIBase, repo)
+	if err != nil {
+		return "", false, err
+	}
+	return tag, isNewerVersion(tag, currentVersion), nil
+}
+
+func runVersionCommand(args []string, o runOptions) int {
+	fs := flag.NewFlagSet("tern version", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	var noCheck, help bool
+	fs.BoolVar(&noCheck, "no-check", false, "skip checking GitHub for newer releases")
+	fs.BoolVar(&help, "help", false, "show help")
+	fs.BoolVar(&help, "h", false, "show help")
+	if err := fs.Parse(args); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			fmt.Fprintln(o.Out, "Usage: tern version [--no-check]")
+			return 0
+		}
+		fmt.Fprintf(o.Err, "tern version: %v\n", err)
+		return 2
+	}
+	if help {
+		fmt.Fprintln(o.Out, "Usage: tern version [--no-check]")
+		return 0
+	}
+
+	fmt.Fprintf(o.Out, "tern %s\n", o.Version)
+	if noCheck {
+		return 0
+	}
+	if _, ok := parseSemver(o.Version); !ok {
+		return 0
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2500*time.Millisecond)
+	defer cancel()
+	tag, available, err := checkUpdateQuick(ctx, o.Version)
+	if err != nil || tag == "" {
+		return 0
+	}
+	if available {
+		fmt.Fprintf(o.Out, "Update available: %s (run \"tern update\")\n", tag)
+	} else {
+		fmt.Fprintf(o.Out, "Up to date (%s)\n", tag)
+	}
+	return 0
+}
+
 func updateAssetName(version, goos, goarch string) string {
 	ext := "tar.gz"
 	if goos == "windows" {
