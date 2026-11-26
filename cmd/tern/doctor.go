@@ -275,14 +275,13 @@ func writeDoctorReport(w io.Writer, r *doctorReport) {
 	fmt.Fprintln(w, "tern doctor")
 	fmt.Fprintln(w)
 
+	tw := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
 	section := func(title string) {
-		fmt.Fprintln(w, title)
+		fmt.Fprintln(tw, title)
 	}
 	row := func(tw *tabwriter.Writer, label, value string) {
 		fmt.Fprintf(tw, "  %s\t%s\n", label, value)
 	}
-
-	tw := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
 	section("System")
 	row(tw, "Version", r.Version)
 	row(tw, "OS/arch", r.OS+"/"+r.Arch)
