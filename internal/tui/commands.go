@@ -404,11 +404,14 @@ func (m *Model) cmdQueue(args string) tea.Cmd {
 }
 
 func (m *Model) cmdModel(args string) tea.Cmd {
-	if strings.TrimSpace(args) == "" {
-		m.openModelModal()
-		return nil
+	trimmed := strings.TrimSpace(args)
+	if trimmed == "" {
+		return m.openModelModal()
 	}
-	name := strings.TrimSpace(strings.Fields(args)[0])
+	if strings.EqualFold(trimmed, "free") {
+		return m.openModelModalWithFilter(true)
+	}
+	name := strings.TrimSpace(strings.Fields(trimmed)[0])
 	m.applyModel(name)
 	m.addInfo("Model set to " + name + ".")
 	return nil

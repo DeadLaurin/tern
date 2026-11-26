@@ -4,6 +4,12 @@ All notable changes to tern are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and tern adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v0.6.1] - 2026-11-26
+
+### Added
+- **Provider-aware `/model` selector**: fetches live models from the active provider's `/models` endpoint (OpenRouter, OpenAI, Groq, xAI, Mistral, Together, Ollama, LM Studio, or custom endpoints) with instant curated fallbacks, per-provider caching, and `r` to refresh.
+- **OpenRouter free-model badge, filter, sort & search**: marks free models with `[FREE]`, defaults OpenRouter to `free-first` sorting, adds **`f`** (and `/model free`) to filter to free models only, **`s`** to cycle sort order (`free-first`, `price`, `context`, `name`), and **`/`** for live substring search.
+
 ## [v0.6.0] - 2026-11-26
 
 ### Added
@@ -97,6 +103,7 @@ All notable changes to tern are documented here. The format is based on
 - `tern doctor` section headers render in order.
 - All `IsParallelSafe` tools, including task sub-agents, run concurrently.
 
+[v0.6.1]: https://github.com/DeadLaurin/tern/compare/v0.6.0...v0.6.1
 [v0.6.0]: https://github.com/DeadLaurin/tern/compare/v0.5.1...v0.6.0
 [v0.5.1]: https://github.com/DeadLaurin/tern/compare/v0.5.0...v0.5.1
 [v0.5.0]: https://github.com/DeadLaurin/tern/compare/v0.4.1...v0.5.0

@@ -41,9 +41,16 @@ const (
 var reasoningEfforts = []string{"none", "low", "high", "max"}
 
 type modelChoice struct {
-	name    string
-	pricing config.ModelPricing
+	name       string
+	pricing    config.ModelPricing
+	hasPricing bool
+	isFree     bool
+	promptPerM float64
+	outputPerM float64
+	remote     bool
 }
+
+var modelSortOrders = []string{"free", "price", "context", "name"}
 
 type modalSession struct {
 	ID        string
@@ -82,8 +89,14 @@ type modalState struct {
 	confirmDelete bool
 	notice        string
 
-	models []modelChoice
-	effort string
+	allModels      []modelChoice
+	models         []modelChoice
+	effort         string
+	freeOnly       bool
+	modelSort      string
+	modelsLoading  bool
+	modelsProvider string
+	modelsCacheKey string
 
 	sessions []modalSession
 
@@ -153,41 +166,271 @@ func (m *Model) handleModalKey(msg tea.KeyMsg) tea.Cmd {
 // Model selector
 // ---------------------------------------------------------------------------
 
-func (m *Model) openModelModal() {
+func (m *Model) openModelModal() tea.Cmd {
+	return m.openModelModalWithFilter(false)
+}
+
+func (m *Model) openModelModalWithFilter(freeOnly bool) tea.Cmd {
 	m.setModal(modalModel)
 	cfg := m.opts.Config
 	current := ""
 	effort := ""
+	provName := "deepseek"
+	baseURL := ""
 	if cfg != nil {
 		current = cfg.Model
 		effort = cfg.ReasoningEffort
-	}
-	names := make([]string, 0, len(cfg.Pricing))
-	if cfg != nil {
-		for name, pricing := range cfg.Pricing {
-			names = append(names, name)
-			_ = pricing
+		if strings.TrimSpace(cfg.Provider) != "" {
+			provName = strings.ToLower(strings.TrimSpace(cfg.Provider))
 		}
+		baseURL = strings.TrimSpace(cfg.BaseURL)
 	}
-	sort.Strings(names)
-	for _, name := range names {
-		m.modal.models = append(m.modal.models, modelChoice{name: name, pricing: cfg.Pricing[name]})
-	}
-	m.modal.index = 0
-	for i, model := range m.modal.models {
-		if model.name == current {
-			m.modal.index = i
-			break
-		}
-	}
+	cacheKey := provName + "|" + baseURL
+	m.modal.modelsProvider = provName
+	m.modal.modelsCacheKey = cacheKey
+	m.modal.freeOnly = freeOnly
 	m.modal.effort = effort
 	if !containsString(reasoningEfforts, effort) {
 		m.modal.effort = "high"
 	}
-	if len(m.modal.models) == 0 {
-		m.modal.notice = "No models are configured in pricing."
+
+	isDeepSeek := provName == "" || provName == "deepseek"
+	if isDeepSeek {
+		m.modal.modelSort = "name"
+		names := make([]string, 0, len(cfg.Pricing))
+		if cfg != nil {
+			for name := range cfg.Pricing {
+				names = append(names, name)
+			}
+		}
+		sort.Strings(names)
+		for _, name := range names {
+			m.modal.allModels = append(m.modal.allModels, modelChoice{
+				name:    name,
+				pricing: cfg.Pricing[name],
+			})
+		}
+		m.rebuildModelChoices(current)
+		if len(m.modal.models) == 0 {
+			m.modal.notice = "No models are configured in pricing."
+		}
+		m.statusMsg = "Model selector"
+		return nil
 	}
-	m.statusMsg = "Model selector"
+
+	// Non-DeepSeek provider: default OpenRouter to free-first sorting so free
+	// models are immediately visible at the top.
+	if provName == "openrouter" {
+		m.modal.modelSort = "free"
+	} else {
+		m.modal.modelSort = "name"
+	}
+
+	// Use cached live models if available for this provider/baseURL.
+	if m.cachedModelsKey == cacheKey && len(m.cachedModels) > 0 {
+		m.modal.allModels = remoteModelsToChoices(m.cachedModels, current)
+		m.rebuildModelChoices(current)
+		m.statusMsg = fmt.Sprintf("Model selector · %s", provName)
+		return nil
+	}
+
+	// Seed immediately with fallback models + current model, then fetch live
+	// models asynchronously from the provider's /models endpoint.
+	fallback := provider.FallbackModelsForProvider(provName)
+	m.modal.allModels = remoteModelsToChoices(fallback, current)
+	m.rebuildModelChoices(current)
+	m.statusMsg = fmt.Sprintf("Model selector · %s", provName)
+
+	cmd := m.fetchModelsCmd(cacheKey)
+	if cmd != nil {
+		m.modal.modelsLoading = true
+		m.modal.notice = fmt.Sprintf("Fetching available models from %s…", provName)
+	}
+	return cmd
+}
+
+func remoteModelsToChoices(remote []provider.RemoteModel, current string) []modelChoice {
+	choices := make([]modelChoice, 0, len(remote)+1)
+	seen := make(map[string]struct{}, len(remote)+1)
+	for _, rm := range remote {
+		id := strings.TrimSpace(rm.ID)
+		if id == "" {
+			continue
+		}
+		if _, dup := seen[id]; dup {
+			continue
+		}
+		seen[id] = struct{}{}
+		choices = append(choices, modelChoice{
+			name: id,
+			pricing: config.ModelPricing{
+				ContextWindow:  rm.ContextLength,
+				SupportsVision: rm.SupportsVision,
+			},
+			hasPricing: rm.HasPricing,
+			isFree:     rm.IsFree,
+			promptPerM: rm.PromptPerM,
+			outputPerM: rm.OutputPerM,
+			remote:     true,
+		})
+	}
+	if cur := strings.TrimSpace(current); cur != "" {
+		if _, ok := seen[cur]; !ok {
+			caps := provider.DefaultModelCapabilities(cur)
+			choices = append(choices, modelChoice{
+				name: cur,
+				pricing: config.ModelPricing{
+					ContextWindow:  caps.ContextWindow,
+					SupportsVision: caps.SupportsVision,
+				},
+				isFree: strings.HasSuffix(strings.ToLower(cur), ":free"),
+				remote: true,
+			})
+		}
+	}
+	return choices
+}
+
+func (m *Model) fetchModelsCmd(cacheKey string) tea.Cmd {
+	if m.opts.Agent == nil || m.opts.Agent.Provider == nil {
+		return nil
+	}
+	lister, ok := m.opts.Agent.Provider.(provider.ModelLister)
+	if !ok {
+		return nil
+	}
+	baseCtx := m.baseCtx
+	if baseCtx == nil {
+		baseCtx = context.Background()
+	}
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(baseCtx, 12*time.Second)
+		defer cancel()
+		models, err := lister.ListModels(ctx)
+		return modelsLoadedMsg{
+			cacheKey: cacheKey,
+			models:   models,
+			err:      err,
+		}
+	}
+}
+
+func (m *Model) handleModelsLoaded(msg modelsLoadedMsg) {
+	if msg.err == nil && len(msg.models) > 0 {
+		m.cachedModelsKey = msg.cacheKey
+		m.cachedModels = msg.models
+	}
+	if m.activeModal != modalModel || m.modal.modelsCacheKey != msg.cacheKey {
+		return
+	}
+	m.modal.modelsLoading = false
+	if msg.err != nil {
+		m.modal.notice = fmt.Sprintf("Could not fetch live models (%v); showing defaults.", msg.err)
+		m.dirty = true
+		return
+	}
+	if len(msg.models) == 0 {
+		m.modal.notice = "Provider returned no models; showing defaults."
+		m.dirty = true
+		return
+	}
+	keepName := ""
+	if m.modal.index >= 0 && m.modal.index < len(m.modal.models) {
+		keepName = m.modal.models[m.modal.index].name
+	} else if m.opts.Config != nil {
+		keepName = m.opts.Config.Model
+	}
+	current := ""
+	if m.opts.Config != nil {
+		current = m.opts.Config.Model
+	}
+	m.modal.allModels = remoteModelsToChoices(msg.models, current)
+	m.modal.notice = ""
+	m.rebuildModelChoices(keepName)
+	m.dirty = true
+}
+
+func (m *Model) rebuildModelChoices(preferName string) {
+	query := strings.ToLower(strings.TrimSpace(m.modal.filter))
+	filtered := make([]modelChoice, 0, len(m.modal.allModels))
+	for _, mc := range m.modal.allModels {
+		if m.modal.freeOnly && !mc.isFree {
+			continue
+		}
+		if query != "" && !strings.Contains(strings.ToLower(mc.name), query) {
+			continue
+		}
+		filtered = append(filtered, mc)
+	}
+
+	sort.SliceStable(filtered, func(i, j int) bool {
+		a, b := filtered[i], filtered[j]
+		switch m.modal.modelSort {
+		case "free":
+			if a.isFree != b.isFree {
+				return a.isFree
+			}
+			return strings.ToLower(a.name) < strings.ToLower(b.name)
+		case "price":
+			if a.isFree != b.isFree {
+				return a.isFree
+			}
+			if a.hasPricing != b.hasPricing {
+				return a.hasPricing
+			}
+			aCost := a.promptPerM + a.outputPerM
+			bCost := b.promptPerM + b.outputPerM
+			if aCost != bCost {
+				return aCost < bCost
+			}
+			return strings.ToLower(a.name) < strings.ToLower(b.name)
+		case "context":
+			if a.pricing.ContextWindow != b.pricing.ContextWindow {
+				return a.pricing.ContextWindow > b.pricing.ContextWindow
+			}
+			return strings.ToLower(a.name) < strings.ToLower(b.name)
+		default:
+			return strings.ToLower(a.name) < strings.ToLower(b.name)
+		}
+	})
+
+	m.modal.models = filtered
+	m.modal.index = 0
+	if preferName != "" {
+		for i, mc := range m.modal.models {
+			if mc.name == preferName {
+				m.modal.index = i
+				break
+			}
+		}
+	}
+}
+
+func (m *Model) countFreeModels() int {
+	n := 0
+	for _, mc := range m.modal.allModels {
+		if mc.isFree {
+			n++
+		}
+	}
+	return n
+}
+
+func (m *Model) cycleModelSort() {
+	cur := 0
+	for i, order := range modelSortOrders {
+		if order == m.modal.modelSort {
+			cur = i
+			break
+		}
+	}
+	m.modal.modelSort = modelSortOrders[(cur+1)%len(modelSortOrders)]
+	keep := ""
+	if m.modal.index >= 0 && m.modal.index < len(m.modal.models) {
+		keep = m.modal.models[m.modal.index].name
+	}
+	m.rebuildModelChoices(keep)
+	m.dirty = true
 }
 
 func containsString(list []string, value string) bool {
@@ -200,8 +443,63 @@ func containsString(list []string, value string) bool {
 }
 
 func (m *Model) handleModelModalKey(msg tea.KeyMsg) tea.Cmd {
+	if m.modal.filterActive {
+		switch msg.Type {
+		case tea.KeyEsc:
+			m.modal.filterActive = false
+			if m.modal.filter != "" {
+				m.modal.filter = ""
+				m.rebuildModelChoices("")
+			}
+			m.dirty = true
+			return nil
+		case tea.KeyEnter:
+			m.modal.filterActive = false
+			m.applyModelModal()
+			return nil
+		case tea.KeyUp:
+			m.modal.index--
+			m.clampModelIndex()
+			return nil
+		case tea.KeyDown:
+			m.modal.index++
+			m.clampModelIndex()
+			return nil
+		case tea.KeyBackspace:
+			if len(m.modal.filter) > 0 {
+				r := []rune(m.modal.filter)
+				m.modal.filter = string(r[:len(r)-1])
+				m.rebuildModelChoices("")
+				m.dirty = true
+			}
+			return nil
+		case tea.KeyCtrlU:
+			m.modal.filter = ""
+			m.rebuildModelChoices("")
+			m.dirty = true
+			return nil
+		case tea.KeyRunes:
+			m.modal.filter += string(msg.Runes)
+			m.rebuildModelChoices("")
+			m.dirty = true
+			return nil
+		case tea.KeySpace:
+			m.modal.filter += " "
+			m.rebuildModelChoices("")
+			m.dirty = true
+			return nil
+		}
+		return nil
+	}
+
 	switch msg.Type {
 	case tea.KeyEsc, tea.KeyCtrlP:
+		if m.modal.filter != "" {
+			m.modal.filter = ""
+			m.rebuildModelChoices("")
+			m.dirty = true
+			return nil
+		}
 		m.closeModal()
 		return nil
 	case tea.KeyUp:
@@ -211,6 +509,20 @@ func (m *Model) handleModelModalKey(msg tea.KeyMsg) tea.Cmd {
 	case tea.KeyDown:
 		m.modal.index++
 		m.clampModelIndex()
+		return nil
+	case tea.KeyPgUp:
+		m.modal.index -= m.modalRowLimit()
+		if m.modal.index < 0 {
+			m.modal.index = 0
+		}
+		m.dirty = true
+		return nil
+	case tea.KeyPgDown:
+		m.modal.index += m.modalRowLimit()
+		if n := len(m.modal.models); n > 0 && m.modal.index >= n {
+			m.modal.index = n - 1
+		}
+		m.dirty = true
 		return nil
 	case tea.KeyLeft:
 		m.cycleEffort(-1)
@@ -225,12 +537,42 @@ func (m *Model) handleModelModalKey(msg tea.KeyMsg) tea.Cmd {
 		m.applyModelModal()
 		return nil
 	case tea.KeyRunes:
-		// 1-4 pick an effort level immediately without leaving the modal.
 		if len(msg.Runes) == 1 {
-			if n := int(msg.Runes[0] - '1'); n >= 0 && n < len(reasoningEfforts) {
-				m.modal.effort = reasoningEfforts[n]
+			r := msg.Runes[0]
+			switch {
+			case r >= '1' && r <= '4':
+				if n := int(r - '1'); n >= 0 && n < len(reasoningEfforts) {
+					m.modal.effort = reasoningEfforts[n]
+					m.dirty = true
+					return nil
+				}
+			case r == 'f' || r == 'F':
+				m.modal.freeOnly = !m.modal.freeOnly
+				keep := ""
+				if m.modal.index >= 0 && m.modal.index < len(m.modal.models) {
+					keep = m.modal.models[m.modal.index].name
+				}
+				m.rebuildModelChoices(keep)
 				m.dirty = true
 				return nil
+			case r == 's' || r == 'S':
+				m.cycleModelSort()
+				return nil
+			case r == '/':
+				m.modal.filterActive = true
+				m.dirty = true
+				return nil
+			case r == 'r' || r == 'R':
+				if m.modal.modelsProvider != "" && m.modal.modelsProvider != "deepseek" {
+					m.cachedModelsKey = ""
+					m.cachedModels = nil
+					if cmd := m.fetchModelsCmd(m.modal.modelsCacheKey); cmd != nil {
+						m.modal.modelsLoading = true
+						m.modal.notice = fmt.Sprintf("Refreshing models from %s…", m.modal.modelsProvider)
+						m.dirty = true
+						return cmd
+					}
+				}
 			}
 		}
 	}
@@ -351,47 +693,111 @@ func (m *Model) modelModalView() string {
 	if m.opts.Config != nil {
 		current = m.opts.Config.Model
 	}
-	fmt.Fprintf(&b, "Current model: %s\n", current)
+	provName := m.modal.modelsProvider
+	if provName == "" {
+		provName = "deepseek"
+	}
+	isRemote := provName != "deepseek"
+	title := "Model"
+	if isRemote {
+		title = "Model · " + provName
+	}
+
+	fmt.Fprintf(&b, "Current model: %s", current)
+	if isRemote {
+		freeCount := m.countFreeModels()
+		if freeCount > 0 {
+			fmt.Fprintf(&b, "  %s", m.st.paint(m.st.dim, fmt.Sprintf("(%d free · %d total)", freeCount, len(m.modal.allModels))))
+		} else if len(m.modal.allModels) > 0 {
+			fmt.Fprintf(&b, "  %s", m.st.paint(m.st.dim, fmt.Sprintf("(%d models)", len(m.modal.allModels))))
+		}
+	}
+	b.WriteString("\n")
+
+	if isRemote || m.modal.freeOnly || m.modal.filterActive || m.modal.filter != "" {
+		freeChip := m.st.paint(m.st.dim, "[ All ]")
+		if m.modal.freeOnly {
+			freeChip = m.st.paint(m.st.success, "[ ● Free only ]")
+		}
+		sortLabel := m.modal.modelSort
+		if sortLabel == "free" {
+			sortLabel = "free-first"
+		}
+		filterLabel := ""
+		if m.modal.filterActive {
+			filterLabel = "  " + m.st.paint(m.st.accent, "/"+m.modal.filter+"▏")
+		} else if m.modal.filter != "" {
+			filterLabel = "  " + m.st.paint(m.st.dim, "filter: "+m.modal.filter)
+		}
+		b.WriteString(freeChip + "  " + m.st.paint(m.st.dim, "sort: "+sortLabel) + filterLabel + "\n")
+	}
+
 	if len(m.modal.models) == 0 {
-		b.WriteString(m.st.paint(m.st.dim, "No models configured in pricing."))
-		return m.modalFrame("Model", b.String(), "esc close")
-	}
-	limit := m.modalRowLimit()
-	start, end := windowRange(len(m.modal.models), m.modal.index, limit)
-	if start > 0 {
-		b.WriteString(m.st.paint(m.st.dim, fmt.Sprintf("  … %d above\n", start)))
-	}
-	for i := start; i < end; i++ {
-		m.addModalRow(strings.Count(b.String(), "\n"), i)
-		model := m.modal.models[i]
-		marker := "  "
-		style := m.st.dim
-		if i == m.modal.index {
-			marker = "▸ "
-			style = m.st.selected
-			if m.st.plain {
-				marker = "> "
+		emptyMsg := "No models configured in pricing."
+		if m.modal.freeOnly {
+			emptyMsg = "No free models match. Press f to show all models."
+		} else if m.modal.filter != "" {
+			emptyMsg = "No models match filter \"" + m.modal.filter + "\"."
+		}
+		b.WriteString(m.st.paint(m.st.dim, emptyMsg) + "\n")
+	} else {
+		limit := m.modalRowLimit()
+		start, end := windowRange(len(m.modal.models), m.modal.index, limit)
+		if start > 0 {
+			b.WriteString(m.st.paint(m.st.dim, fmt.Sprintf("  … %d above\n", start)))
+		}
+		maxW := maxInt(30, m.modalTextWidth())
+		for i := start; i < end; i++ {
+			m.addModalRow(strings.Count(b.String(), "\n"), i)
+			model := m.modal.models[i]
+			marker := "  "
+			style := m.st.dim
+			if i == m.modal.index {
+				marker = "▸ "
+				style = m.st.selected
+				if m.st.plain {
+					marker = "> "
+				}
 			}
+			active := " "
+			if model.name == current {
+				active = "*"
+			}
+			tag := "text"
+			if model.pricing.SupportsVision {
+				tag = "vision"
+			}
+			ctx := compactContext(model.pricing.ContextWindow)
+			if model.remote {
+				nameWidth := minInt(44, maxInt(22, maxW-34))
+				priceStr := ""
+				if model.isFree {
+					priceStr = "[FREE]"
+				} else if model.hasPricing {
+					priceStr = fmt.Sprintf("$%.2f/$%.2f", model.promptPerM, model.outputPerM)
+				}
+				base := fmt.Sprintf("%s%s %-*s %-5s %-6s",
+					marker, active, nameWidth, truncateCell(model.name, nameWidth), ctx, tag)
+				row := m.st.paint(style, base)
+				if model.isFree {
+					row += "  " + m.st.paint(m.st.success, priceStr)
+				} else if priceStr != "" {
+					row += "  " + m.st.paint(m.st.dim, priceStr)
+				}
+				b.WriteString(row)
+			} else {
+				line := fmt.Sprintf("%s%s %-18s %-5s %-6s  off %.2f/%.2f/%.2f  peak %.2f/%.2f/%.2f",
+					marker, active, truncateCell(model.name, 18), ctx, tag,
+					model.pricing.OffPeakCacheHitPerM, model.pricing.OffPeakCacheMissPerM, model.pricing.OffPeakOutputPerM,
+					model.pricing.PeakCacheHitPerM, model.pricing.PeakCacheMissPerM, model.pricing.PeakOutputPerM,
+				)
+				b.WriteString(m.st.paint(style, truncateCell(line, maxW)))
+			}
+			b.WriteString("\n")
 		}
-		active := " "
-		if model.name == current {
-			active = "*"
+		if end < len(m.modal.models) {
+			b.WriteString(m.st.paint(m.st.dim, fmt.Sprintf("  … %d below\n", len(m.modal.models)-end)))
 		}
-		tag := "text"
-		if model.pricing.SupportsVision {
-			tag = "vision"
-		}
-		ctx := compactContext(model.pricing.ContextWindow)
-		line := fmt.Sprintf("%s%s %-18s %-5s %-6s  off %.2f/%.2f/%.2f  peak %.2f/%.2f/%.2f",
-			marker, active, truncateCell(model.name, 18), ctx, tag,
-			model.pricing.OffPeakCacheHitPerM, model.pricing.OffPeakCacheMissPerM, model.pricing.OffPeakOutputPerM,
-			model.pricing.PeakCacheHitPerM, model.pricing.PeakCacheMissPerM, model.pricing.PeakOutputPerM,
-		)
-		b.WriteString(m.st.paint(style, truncateCell(line, maxInt(30, m.modalTextWidth()))))
-		b.WriteString("\n")
-	}
-	if end < len(m.modal.models) {
-		b.WriteString(m.st.paint(m.st.dim, fmt.Sprintf("  … %d below\n", len(m.modal.models)-end)))
 	}
 	b.WriteString("\n")
 	b.WriteString(m.st.paint(m.st.accent, "Reasoning: "))
@@ -409,8 +815,11 @@ func (m *Model) modelModalView() string {
 	if m.modal.notice != "" {
 		b.WriteString("\n" + m.st.paint(m.st.amber, m.modal.notice))
 	}
-	return m.modalFrame("Model", strings.TrimRight(b.String(), "\n"),
-		"↑/↓ select · ←/→ effort · 1-4 pick · enter apply · esc close")
+	footer := "↑/↓ select · ←/→ effort · 1-4 pick · enter apply · esc close"
+	if isRemote {
+		footer = "↑/↓ select · f free only · s sort · / search · r refresh · enter apply · esc close"
+	}
+	return m.modalFrame(title, strings.TrimRight(b.String(), "\n"), footer)
 }
 
 func compactContext(window int) string {

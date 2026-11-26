@@ -257,9 +257,11 @@ type Model struct {
 
 	// Modal state. activeModal is the enum the key router and view use;
 	// modal carries the selected rows, filters and transient prompts.
-	activeModal modalKind
-	modal       modalState
-	needsSetup  bool
+	activeModal     modalKind
+	modal           modalState
+	needsSetup      bool
+	cachedModelsKey string
+	cachedModels    []provider.RemoteModel
 
 	// clipboardFn is the clipboard writer. It defaults to copyToClipboard and
 	// is injectable so tests stay hermetic.
@@ -291,6 +293,12 @@ type updateCheckMsg struct {
 	latest    string
 	available bool
 	announce  bool
+}
+
+type modelsLoadedMsg struct {
+	cacheKey string
+	models   []provider.RemoteModel
+	err      error
 }
 
 type slashItem struct {
@@ -351,6 +359,10 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.addInfo(fmt.Sprintf("Up to date (%s).", msg.latest))
 		}
 		m.dirty = true
+		return m, nil
+
+	case modelsLoadedMsg:
+		m.handleModelsLoaded(msg)
 		return m, nil
 
 	case tea.WindowSizeMsg:
@@ -659,8 +671,7 @@ func (m *Model) handleKey(msg tea.KeyMsg) tea.Cmd {
 		return m.openExternalEditor()
 	}
 	if msg.Type == tea.KeyCtrlP {
-		m.openModelModal()
-		return nil
+		return m.openModelModal()
 	}
 
 	return m.handleEditorKey(msg)

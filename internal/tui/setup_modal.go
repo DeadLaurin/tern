@@ -354,6 +354,8 @@ func (m *Model) commitProviderSetup(opt providerOption, ps *providerSetupState) 
 	}
 
 	m.needsSetup = false
+	m.cachedModelsKey = ""
+	m.cachedModels = nil
 	m.ctxWindow = defaultContextWindow(m.opts)
 	m.closeModal()
 	m.statusMsg = fmt.Sprintf("Using %s · %s", opt.displayName, model)
