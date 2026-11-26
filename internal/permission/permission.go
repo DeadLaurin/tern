@@ -475,6 +475,8 @@ func isInsideWorkspace(path, workDir string) bool {
 	absPath := expandHome(path)
 	if !isPathAbs(absPath) {
 		absPath = filepath.Join(absWork, absPath)
+	} else if resolved, err := filepath.Abs(absPath); err == nil {
+		absPath = resolved
 	}
 	absPath = filepath.Clean(absPath)
 	rel, err := filepath.Rel(absWork, absPath)
