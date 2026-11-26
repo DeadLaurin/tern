@@ -78,6 +78,8 @@ type Server struct {
 	totalCost     float64
 	cacheHit      float64
 	contextTokens int
+	tokensPerSec  float64
+	startedAt     time.Time
 	clients       map[chan sseFrame]struct{}
 	approvals     map[string]*pendingApproval
 	pending       *approvalWire
@@ -136,6 +138,7 @@ func New(opts Options) *Server {
 		auth:      newAuthManager(opts.Password, opts.AuthEnabled || strings.TrimSpace(opts.Password) != ""),
 		ctx:       ctx,
 		cancel:    cancel,
+		startedAt: time.Now(),
 		clients:   make(map[chan sseFrame]struct{}),
 		approvals: make(map[string]*pendingApproval),
 	}
@@ -203,6 +206,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/cancel", s.handleCancel)
 	mux.HandleFunc("/api/approve", s.handleApprove)
 	mux.HandleFunc("/api/model", s.handleModel)
+	mux.HandleFunc("/api/permission", s.handlePermission)
+	mux.HandleFunc("/api/compact", s.handleCompact)
 	return s.authMiddleware(mux)
 }
 
@@ -240,6 +245,8 @@ type statusResponse struct {
 	ContextWindow   int            `json:"context_window"`
 	CacheHitRate    float64        `json:"cache_hit_rate"`
 	TotalCostUSD    float64        `json:"total_cost_usd"`
+	TokensPerSec    float64        `json:"tokens_per_sec"`
+	UptimeSec       int64          `json:"uptime_sec"`
 	Usage           provider.Usage `json:"usage"`
 	PendingApproval *approvalWire  `json:"pending_approval,omitempty"`
 	AuthEnabled     bool           `json:"auth_enabled"`
@@ -265,6 +272,8 @@ func (s *Server) status() statusResponse {
 		ContextTokens: s.contextTokens,
 		CacheHitRate:  s.cacheHit,
 		TotalCostUSD:  s.totalCost,
+		TokensPerSec:  s.tokensPerSec,
+		UptimeSec:     int64(time.Since(s.startedAt).Seconds()),
 		Usage:         s.usage,
 		AuthEnabled:   s.auth != nil && s.auth.Enabled(),
 	}
@@ -489,9 +498,20 @@ func (s *Server) onEvent(ev agent.Event) {
 		if ev.ContextTokens > 0 {
 			s.contextTokens = ev.ContextTokens
 		}
+		if ev.TokensPerSec > 0 {
+			s.tokensPerSec = ev.TokensPerSec
+		}
 	case agent.EventTurnEnd:
 		s.totalCost = ev.TotalCostUSD
 		s.cacheHit = ev.CacheHitRate
+		if ev.ContextTokens > 0 {
+			s.contextTokens = ev.ContextTokens
+		}
+		if ev.TokensPerSec > 0 {
+			s.tokensPerSec = ev.TokensPerSec
+		}
+	case agent.EventCompact:
+		s.cacheHit = 0
 		if ev.ContextTokens > 0 {
 			s.contextTokens = ev.ContextTokens
 		}
@@ -767,4 +787,82 @@ func cacheHitRate(u provider.Usage) float64 {
 		return 0
 	}
 	return float64(u.PromptCacheHitTokens) / float64(total)
+}
+
+// ---------------------------------------------------------------------------
+// Permission & Compaction
+// ---------------------------------------------------------------------------
+
+type permissionRequest struct {
+	Mode string `json:"mode"`
+}
+
+func (s *Server) handlePermission(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	var req permissionRequest
+	if err := decodeJSON(r, &req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid JSON body")
+		return
+	}
+	mode, err := permission.ParseMode(strings.TrimSpace(req.Mode))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	s.mu.Lock()
+	if s.running {
+		s.mu.Unlock()
+		writeError(w, http.StatusConflict, "cannot change permission mode while a turn is running")
+		return
+	}
+	var nextEval *permission.Evaluator
+	if s.Permissions != nil {
+		policy := s.Permissions.Policy()
+		policy.Mode = mode
+		nextEval = permission.New(policy)
+	} else {
+		nextEval = permission.New(permission.Policy{Mode: mode, WorkDir: s.WorkDir})
+	}
+	s.Permissions = nextEval
+	if s.Agent != nil {
+		s.Agent.Permissions = nextEval
+	}
+	if s.Config != nil {
+		s.Config.PermissionMode = mode.String()
+	}
+	s.mu.Unlock()
+	writeJSON(w, http.StatusOK, s.status())
+}
+
+type compactRequest struct {
+	Instructions string `json:"instructions,omitempty"`
+}
+
+func (s *Server) handleCompact(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	if s.Agent == nil {
+		writeError(w, http.StatusServiceUnavailable, "agent is not available")
+		return
+	}
+	s.mu.Lock()
+	running := s.running
+	s.mu.Unlock()
+	if running {
+		writeError(w, http.StatusConflict, "cannot compact while a turn is running")
+		return
+	}
+	var req compactRequest
+	_ = decodeJSON(r, &req)
+	res, err := s.Agent.Compact(r.Context(), req.Instructions)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"compacted": true, "result": res, "status": s.status()})
 }

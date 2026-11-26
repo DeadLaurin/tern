@@ -3,280 +3,248 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<title>tern serve</title>
+<title>tern</title>
 <meta name="color-scheme" content="dark">
 <style>
   :root {
     --bg: #14171c;
     --surface: #1b1f27;
-    --surface-2: #20252f;
     --border: #2e3440;
     --text: #e6eaf0;
     --muted: #9aa3b2;
     --dim: #6c7586;
     --sage: #8fbc8f;
     --amber: #d8b46a;
+    --blue: #88a9d3;
     --red: #d97a7a;
     --mono: ui-monospace, "SF Mono", Menlo, Monaco, Consolas, "Liberation Mono", monospace;
-    --sans: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
   }
   * { box-sizing: border-box; }
   html, body {
     margin: 0;
     padding: 0;
+    height: 100%;
     background: var(--bg);
     color: var(--text);
-    font-family: var(--sans);
-    font-size: 15px;
-    line-height: 1.6;
+    font-family: var(--mono);
+    font-size: 13.5px;
+    line-height: 1.55;
     -webkit-font-smoothing: antialiased;
+    overflow: hidden;
   }
-  body { min-height: 100vh; display: flex; flex-direction: column; }
-  button, select, textarea, input { font: inherit; color: inherit; }
-  button { cursor: pointer; }
-  a { color: var(--text); text-decoration-color: var(--dim); text-underline-offset: 3px; }
-
+  button, input, textarea, select { font: inherit; color: inherit; }
+  button { cursor: pointer; background: none; border: 0; padding: 0; }
+  a { color: var(--blue); text-decoration-color: var(--dim); text-underline-offset: 3px; }
   .hidden { display: none !important; }
 
   /* ---------- login ---------- */
   #login {
-    flex: 1;
+    height: 100%;
     display: flex;
     align-items: center;
     justify-content: center;
     padding: 24px;
   }
-  .login-card {
+  .login-box {
     width: 100%;
     max-width: 360px;
-    background: var(--surface);
     border: 1px solid var(--border);
-    border-radius: 12px;
-    padding: 28px 24px;
+    border-radius: 10px;
+    padding: 24px 22px;
+    text-align: center;
   }
-  .login-card h1 {
-    font-family: var(--mono);
-    font-size: 1.35rem;
-    font-weight: 600;
-    letter-spacing: -0.02em;
-    margin: 0 0 4px;
+  .login-emblem {
+    display: inline-block;
+    text-align: left;
+    font-size: 9px;
+    line-height: 1.1;
+    color: var(--dim);
+    margin: 0 0 14px;
+    user-select: none;
   }
-  .login-card p { color: var(--muted); font-size: 0.88rem; margin: 0 0 20px; }
-  .login-card input {
+  .login-box h1 { font-size: 1rem; font-weight: 600; margin: 0 0 4px; }
+  .login-box p { color: var(--dim); font-size: 0.85rem; margin: 0 0 16px; }
+  .login-box input {
     width: 100%;
     background: var(--bg);
     border: 1px solid var(--border);
-    border-radius: 8px;
-    padding: 10px 12px;
-    font-family: var(--mono);
+    border-radius: 7px;
+    padding: 9px 11px;
     outline: none;
   }
-  .login-card input:focus { border-color: var(--muted); }
-  .login-card button {
+  .login-box input:focus { border-color: var(--sage); }
+  .login-box button {
     width: 100%;
-    margin-top: 14px;
-    background: var(--surface-2);
+    margin-top: 12px;
     border: 1px solid var(--border);
-    border-radius: 8px;
-    padding: 10px 12px;
-    font-family: var(--mono);
-    font-size: 0.9rem;
-    transition: border-color .12s;
+    border-radius: 7px;
+    padding: 8px 12px;
+    color: var(--sage);
+    border-color: var(--sage);
   }
-  .login-card button:hover { border-color: var(--muted); }
-  .login-error { color: var(--red); font-size: 0.82rem; min-height: 1.2em; margin-top: 10px; font-family: var(--mono); }
+  .login-box button:hover { background: rgba(143, 188, 143, 0.1); }
+  .login-err { color: var(--red); font-size: 0.82rem; min-height: 1.3em; margin-top: 10px; }
 
-  /* ---------- app ---------- */
-  #app { flex: 1; display: flex; flex-direction: column; min-height: 100vh; }
-  header {
-    position: sticky;
-    top: 0;
-    z-index: 5;
-    background: rgba(20, 23, 28, 0.94);
-    backdrop-filter: blur(8px);
-    border-bottom: 1px solid var(--border);
-  }
-  .bar {
-    max-width: 880px;
-    margin: 0 auto;
-    padding: 10px 16px;
+  /* ---------- two-pane terminal workspace ---------- */
+  #app {
+    height: 100%;
     display: flex;
-    align-items: center;
-    gap: 10px 14px;
-    flex-wrap: wrap;
-  }
-  .brand {
-    font-family: var(--mono);
-    font-size: 0.95rem;
-    font-weight: 600;
-    letter-spacing: -0.01em;
-    white-space: nowrap;
-  }
-  .brand span { color: var(--dim); font-weight: 400; }
-  .spacer { flex: 1; }
-  .stat {
-    font-family: var(--mono);
-    font-size: 0.74rem;
-    color: var(--dim);
-    white-space: nowrap;
-  }
-  .stat b { color: var(--muted); font-weight: 500; }
-  .stat.warn b { color: var(--amber); }
-  select.mini {
-    background: transparent;
-    border: 1px solid var(--border);
-    border-radius: 6px;
-    padding: 3px 6px;
-    font-family: var(--mono);
-    font-size: 0.76rem;
-    color: var(--muted);
-    outline: none;
-  }
-  select.mini:hover { border-color: var(--muted); color: var(--text); }
-  .icon-btn {
-    background: transparent;
-    border: 1px solid var(--border);
-    border-radius: 6px;
-    padding: 3px 9px;
-    font-family: var(--mono);
-    font-size: 0.74rem;
-    color: var(--dim);
-  }
-  .icon-btn:hover { color: var(--text); border-color: var(--muted); }
-
-  main {
-    flex: 1;
     width: 100%;
-    max-width: 880px;
-    margin: 0 auto;
-    padding: 22px 16px 12px;
   }
-  .empty {
-    color: var(--dim);
-    font-family: var(--mono);
-    font-size: 0.84rem;
-    text-align: center;
-    padding: 60px 12px;
-  }
-  .empty code { color: var(--muted); }
 
-  .msg { margin: 0 0 20px; }
-  .msg.user .bubble {
-    background: var(--surface);
-    border: 1px solid var(--border);
-    border-radius: 10px;
-    padding: 10px 14px;
-    white-space: pre-wrap;
-    word-break: break-word;
-    font-size: 0.94rem;
+  .pane-main {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+    padding: 12px 18px 8px;
   }
-  .msg.user .who, .msg.assistant .who {
-    font-family: var(--mono);
-    font-size: 0.7rem;
-    letter-spacing: 0.12em;
-    text-transform: uppercase;
+
+  .pane-divider {
+    width: 1px;
+    background: var(--border);
+    flex: none;
+  }
+
+  .pane-sidebar {
+    width: 310px;
+    flex: none;
+    height: 100%;
+    padding: 14px 16px;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 18px;
+  }
+  #app.sidebar-hidden .pane-divider,
+  #app.sidebar-hidden .pane-sidebar { display: none; }
+
+  /* ---------- transcript ---------- */
+  #transcript {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    padding-bottom: 14px;
+    display: flex;
+    flex-direction: column;
+  }
+  #transcript::-webkit-scrollbar, .pane-sidebar::-webkit-scrollbar { width: 6px; }
+  #transcript::-webkit-scrollbar-thumb, .pane-sidebar::-webkit-scrollbar-thumb {
+    background: var(--border);
+    border-radius: 3px;
+  }
+
+  /* welcome */
+  .welcome {
+    margin: auto;
+    text-align: center;
+    padding: 24px 8px;
+    user-select: none;
+  }
+  .emblem {
+    display: inline-block;
+    text-align: left;
+    font-size: 10.5px;
+    line-height: 1.15;
     color: var(--dim);
-    margin-bottom: 6px;
+    margin: 0 0 18px;
   }
-  .msg.steer .bubble { border-color: var(--amber); }
-  .msg.steer .who { color: var(--amber); }
-  .body { word-break: break-word; overflow-wrap: anywhere; }
-  .body p { margin: 0 0 10px; }
-  .body p:last-child { margin-bottom: 0; }
-  .body pre {
+  .welcome-title {
+    font-size: 1.05rem;
+    font-weight: 600;
+    color: var(--text);
+  }
+  .welcome-ver { color: var(--dim); font-weight: 400; margin-left: 6px; }
+  .welcome-model { color: var(--sage); margin-top: 2px; }
+  .welcome-dir { color: var(--dim); font-size: 0.85rem; margin-top: 2px; }
+  .welcome-hints { color: var(--dim); font-size: 0.85rem; margin-top: 16px; }
+  .welcome-hints span { color: var(--blue); }
+
+  /* entries */
+  .entry { margin: 0 0 14px; word-break: break-word; overflow-wrap: anywhere; }
+  .entry-user {
+    display: flex;
+    gap: 0;
+    white-space: pre-wrap;
+  }
+  .entry-user .u-prompt { color: var(--text); flex: none; }
+  .entry-user .u-bar { color: var(--sage); flex: none; margin-right: 6px; }
+  .entry-user.steer .u-bar { color: var(--amber); }
+  .entry-user .u-text { color: var(--text); flex: 1; min-width: 0; }
+
+  .entry-assistant p { margin: 0 0 8px; }
+  .entry-assistant p:last-child { margin-bottom: 0; }
+  .entry-assistant pre {
     background: var(--surface);
     border: 1px solid var(--border);
-    border-radius: 8px;
-    padding: 12px;
+    border-radius: 6px;
+    padding: 10px 12px;
     overflow-x: auto;
-    font-family: var(--mono);
-    font-size: 0.82rem;
-    line-height: 1.5;
+    margin: 8px 0;
+    font-size: 0.92em;
   }
-  .body code {
-    font-family: var(--mono);
-    font-size: 0.86em;
+  .entry-assistant code {
     background: var(--surface);
     border: 1px solid var(--border);
     border-radius: 4px;
-    padding: 1px 4px;
+    padding: 0 4px;
+    font-size: 0.94em;
   }
-  .body pre code { background: none; border: 0; padding: 0; font-size: inherit; }
-  .body ul, .body ol { margin: 0 0 10px; padding-left: 22px; }
-  .body li { margin: 2px 0; }
-  .body strong { font-weight: 600; }
+  .entry-assistant pre code { background: none; border: 0; padding: 0; }
+  .entry-assistant ul, .entry-assistant ol { margin: 4px 0 8px; padding-left: 20px; }
+  .entry-assistant h1, .entry-assistant h2, .entry-assistant h3 {
+    font-size: 1em;
+    color: var(--text);
+    margin: 10px 0 4px;
+  }
 
-  details.reasoning {
-    margin: 0 0 10px;
-    border-left: 2px solid var(--border);
-    padding-left: 10px;
-  }
-  details.reasoning > summary {
-    font-family: var(--mono);
-    font-size: 0.72rem;
-    letter-spacing: 0.08em;
-    text-transform: uppercase;
+  .entry-reasoning summary {
     color: var(--dim);
     cursor: pointer;
-    user-select: none;
     list-style: none;
+    user-select: none;
   }
-  details.reasoning > summary::-webkit-details-marker { display: none; }
-  details.reasoning > summary::before { content: "▸ "; }
-  details.reasoning[open] > summary::before { content: "▾ "; }
-  details.reasoning .text {
+  .entry-reasoning summary::-webkit-details-marker { display: none; }
+  .entry-reasoning summary::before { content: "▸ "; }
+  .entry-reasoning[open] summary::before { content: "▾ "; }
+  .entry-reasoning .r-body {
+    margin-top: 4px;
+    padding-left: 12px;
+    border-left: 1px solid var(--border);
+    color: var(--dim);
     white-space: pre-wrap;
-    color: var(--muted);
-    font-size: 0.86rem;
-    margin-top: 6px;
   }
 
-  .tool {
-    border: 1px solid var(--border);
-    border-radius: 9px;
-    background: var(--surface);
-    margin: 0 0 10px;
-    overflow: hidden;
-    font-family: var(--mono);
-    font-size: 0.8rem;
-  }
-  .tool-head {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    padding: 7px 11px;
+  .entry-tool { margin: 0 0 8px; }
+  .tool-line {
     cursor: pointer;
     user-select: none;
-    color: var(--muted);
+    display: flex;
+    gap: 6px;
+    align-items: baseline;
   }
-  .tool-head:hover { color: var(--text); }
-  .tool-name { color: var(--text); font-weight: 600; }
-  .tool-args { color: var(--dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; min-width: 0; }
-  .tool-meta { color: var(--dim); font-size: 0.72rem; flex: none; }
-  .tool.error .tool-meta { color: var(--red); }
-  .tool-body { border-top: 1px solid var(--border); }
-  .tool-body pre {
-    margin: 0;
-    padding: 10px 12px;
-    max-height: 340px;
-    overflow: auto;
+  .tool-line:hover .tool-name { text-decoration: underline; }
+  .tool-name { color: var(--blue); flex: none; }
+  .tool-summary { color: var(--dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; min-width: 0; }
+  .tool-meta { color: var(--dim); flex: none; }
+  .entry-tool.error .tool-meta { color: var(--red); }
+  .tool-out {
+    margin: 4px 0 0 16px;
+    padding: 6px 10px;
+    border-left: 1px solid var(--border);
+    color: var(--muted);
     white-space: pre-wrap;
-    word-break: break-word;
-    font-size: 0.78rem;
-    color: var(--muted);
+    max-height: 260px;
+    overflow: auto;
+    font-size: 0.9em;
   }
-  .tool.error .tool-body pre { color: var(--red); }
+  .entry-tool.error .tool-out { color: var(--red); border-left-color: var(--red); }
 
-  .note {
-    font-family: var(--mono);
-    font-size: 0.76rem;
-    color: var(--dim);
-    border-left: 2px solid var(--border);
-    padding: 2px 0 2px 10px;
-    margin: 0 0 14px;
-  }
-  .note.error { color: var(--red); border-color: var(--red); }
-  .note.compact { color: var(--amber); border-color: var(--amber); }
+  .entry-info { color: var(--dim); white-space: pre-wrap; }
+  .entry-info::before { content: "• "; color: var(--blue); }
+  .entry-error { color: var(--red); white-space: pre-wrap; }
+  .entry-error::before { content: "✗ "; }
 
   .caret {
     display: inline-block;
@@ -284,201 +252,332 @@
     height: 1em;
     background: var(--sage);
     vertical-align: text-bottom;
-    animation: blink 1.1s steps(2, start) infinite;
     margin-left: 2px;
+    animation: blink 1s steps(2, start) infinite;
   }
   @keyframes blink { to { visibility: hidden; } }
 
-  /* ---------- approval ---------- */
+  /* ---------- approval banner ---------- */
   #approval {
-    max-width: 880px;
-    margin: 0 auto;
-    padding: 0 16px;
-    width: 100%;
-  }
-  .approval-card {
     border: 1px solid var(--amber);
-    border-radius: 10px;
-    background: #201d16;
-    padding: 14px;
-    margin-bottom: 14px;
+    border-radius: 8px;
+    padding: 10px 12px;
+    margin-bottom: 8px;
+    background: rgba(216, 180, 106, 0.06);
   }
-  .approval-title {
-    font-family: var(--mono);
-    font-size: 0.78rem;
-    letter-spacing: 0.1em;
-    text-transform: uppercase;
-    color: var(--amber);
-    margin-bottom: 6px;
-  }
-  .approval-detail {
-    font-family: var(--mono);
-    font-size: 0.82rem;
-    color: var(--text);
-    margin-bottom: 6px;
-    white-space: pre-wrap;
-    word-break: break-word;
-  }
-  .approval-reason { color: var(--muted); font-size: 0.8rem; margin-bottom: 10px; }
-  .approval-diff {
-    max-height: 260px;
+  .appr-head { color: var(--amber); font-weight: 600; margin-bottom: 4px; }
+  .appr-detail { color: var(--text); margin-bottom: 4px; white-space: pre-wrap; }
+  .appr-reason { color: var(--dim); font-size: 0.9em; margin-bottom: 6px; }
+  .appr-diff {
+    margin: 0 0 8px;
+    padding: 8px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    max-height: 200px;
     overflow: auto;
-    background: var(--bg);
+    white-space: pre;
+    font-size: 0.88em;
+  }
+  .appr-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+  .cli-btn {
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 3px 10px;
+    color: var(--muted);
+  }
+  .cli-btn:hover { border-color: var(--muted); color: var(--text); }
+  .cli-btn.ok { border-color: var(--sage); color: var(--sage); }
+  .cli-btn.no { border-color: var(--red); color: var(--red); }
+
+  /* ---------- live status & slash menu ---------- */
+  .live-status {
+    color: var(--dim);
+    min-height: 1.4em;
+    margin-bottom: 4px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .live-status.busy { color: var(--muted); }
+
+  #slashMenu {
+    margin-bottom: 6px;
+    padding: 2px 0;
+  }
+  .slash-row {
+    display: flex;
+    gap: 10px;
+    padding: 1px 4px;
+    cursor: pointer;
+    border-radius: 4px;
+  }
+  .slash-row.active { color: var(--text); }
+  .slash-row.active .slash-cmd { color: var(--sage); font-weight: 600; }
+  .slash-row.active .slash-desc { color: var(--text); }
+  .slash-marker { width: 14px; flex: none; color: var(--sage); }
+  .slash-cmd { width: 108px; flex: none; color: var(--blue); }
+  .slash-desc { color: var(--dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+  /* ---------- composer box (matches CLI rounded border) ---------- */
+  .composer-box {
     border: 1px solid var(--border);
     border-radius: 8px;
-    padding: 10px;
-    margin-bottom: 12px;
-    font-family: var(--mono);
-    font-size: 0.76rem;
-    white-space: pre;
+    padding: 8px 12px;
+    display: flex;
+    align-items: flex-start;
+    gap: 6px;
+    cursor: text;
   }
-  .approval-actions { display: flex; gap: 8px; flex-wrap: wrap; }
-  .btn {
-    border: 1px solid var(--border);
-    background: var(--surface);
-    border-radius: 7px;
-    padding: 7px 14px;
-    font-family: var(--mono);
-    font-size: 0.8rem;
-    transition: border-color .12s, color .12s;
+  .composer-box:focus-within { border-color: var(--muted); }
+  .composer-prompt { color: var(--sage); flex: none; user-select: none; }
+  .composer-input-wrap {
+    position: relative;
+    flex: 1;
+    min-width: 0;
   }
-  .btn:hover { border-color: var(--muted); }
-  .btn.primary { border-color: var(--sage); color: var(--sage); }
-  .btn.primary:hover { background: rgba(143, 188, 143, 0.12); }
-  .btn.danger { border-color: var(--red); color: var(--red); }
-  .btn.danger:hover { background: rgba(217, 122, 122, 0.12); }
-  .btn:disabled { opacity: 0.5; cursor: default; }
-
-  /* ---------- composer ---------- */
-  footer.composer {
-    position: sticky;
-    bottom: 0;
-    background: linear-gradient(to top, var(--bg) 70%, rgba(20, 23, 28, 0));
-    padding: 12px 16px 18px;
+  .composer-ghost {
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    white-space: pre-wrap;
+    color: transparent;
+    overflow: hidden;
   }
-  .composer-inner {
-    max-width: 880px;
-    margin: 0 auto;
-    background: var(--surface);
-    border: 1px solid var(--border);
-    border-radius: 12px;
-    padding: 10px 12px;
-  }
-  .composer textarea {
+  .composer-ghost .g-tail { color: var(--dim); }
+  #input {
+    position: relative;
     width: 100%;
-    min-height: 44px;
-    max-height: 40vh;
+    min-height: 1.55em;
+    max-height: 30vh;
     resize: none;
     background: transparent;
     border: 0;
     outline: none;
-    font-size: 0.95rem;
-    line-height: 1.5;
-    padding: 2px 0;
+    padding: 0;
+    display: block;
   }
-  .composer-row {
+  #input::placeholder { color: var(--dim); }
+  .composer-actions {
+    display: flex;
+    gap: 6px;
+    flex: none;
+    align-items: center;
+  }
+  .composer-mini {
+    color: var(--dim);
+    font-size: 0.85em;
+    padding: 1px 6px;
+    border: 1px solid transparent;
+    border-radius: 4px;
+  }
+  .composer-mini:hover { color: var(--text); border-color: var(--border); }
+  .composer-mini.stop { color: var(--amber); border-color: var(--amber); }
+
+  /* ---------- bottom CLI status bar ---------- */
+  .status-bar {
+    margin-top: 6px;
+    color: var(--dim);
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0;
+    align-items: center;
+    font-size: 0.92em;
+    user-select: none;
+  }
+  .st-seg { color: var(--dim); }
+  .st-seg.click { cursor: pointer; }
+  .st-seg.click:hover { color: var(--text); }
+  .st-seg.yolo { color: var(--amber); }
+  .st-sep { color: var(--border); margin: 0 8px; }
+
+  /* ---------- right sidebar (matches CLI CONTEXT & STATS) ---------- */
+  .sb-head {
+    color: var(--dim);
+    font-size: 0.85em;
+    letter-spacing: 0.06em;
     display: flex;
     align-items: center;
     gap: 8px;
-    margin-top: 6px;
-  }
-  .composer-hint {
-    font-family: var(--mono);
-    font-size: 0.7rem;
-    color: var(--dim);
-    flex: 1;
-    min-width: 0;
-    overflow: hidden;
-    text-overflow: ellipsis;
+    margin-bottom: 8px;
     white-space: nowrap;
   }
-  .composer .btn { padding: 6px 14px; }
-  .dot {
-    display: inline-block;
-    width: 6px;
-    height: 6px;
-    border-radius: 50%;
-    background: var(--sage);
-    margin-right: 6px;
-    vertical-align: middle;
+  .sb-head::after {
+    content: "";
+    flex: 1;
+    height: 1px;
+    background: var(--border);
   }
-  .dot.off { background: var(--dim); }
-  .dot.busy { background: var(--amber); animation: blink 1.1s steps(2, start) infinite; }
+  .sb-model { color: var(--text); font-weight: 500; cursor: pointer; }
+  .sb-model:hover { color: var(--sage); }
+  .sb-dim { color: var(--dim); }
+  .sb-gauge {
+    white-space: pre;
+    color: var(--muted);
+    margin-top: 2px;
+  }
+  .sb-gauge .bar-fill { color: var(--sage); }
+  .sb-gauge .bar-empty { color: var(--border); }
+  .sb-gauge.warn .bar-fill { color: var(--amber); }
+  .sb-stats { color: var(--dim); margin-top: 6px; }
+  .sb-controls {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    margin-top: 8px;
+  }
+  .sb-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+  }
+  .sb-select {
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 5px;
+    padding: 2px 6px;
+    color: var(--muted);
+    font-size: 0.9em;
+    outline: none;
+    max-width: 175px;
+  }
+  .sb-select:hover, .sb-select:focus { border-color: var(--muted); color: var(--text); }
+  .sb-logout {
+    margin-top: auto;
+    align-self: flex-start;
+    color: var(--dim);
+    border: 1px solid var(--border);
+    border-radius: 5px;
+    padding: 3px 10px;
+  }
+  .sb-logout:hover { color: var(--text); border-color: var(--muted); }
 
-  @media (max-width: 640px) {
-    html, body { font-size: 14px; }
-    .bar { padding: 8px 12px; gap: 6px 10px; }
-    .stat.optional { display: none; }
-    main { padding: 16px 12px 8px; }
-    footer.composer { padding: 8px 12px 14px; }
-    #approval { padding: 0 12px; }
-    .composer-hint { display: none; }
+  @media (max-width: 900px) {
+    .pane-divider, .pane-sidebar { display: none; }
+    .pane-main { padding: 10px 12px 6px; }
   }
 </style>
 </head>
 <body>
 
 <div id="login" class="hidden">
-  <form class="login-card" id="loginForm">
+  <form class="login-box" id="loginForm">
+    <pre class="login-emblem" aria-hidden="true">▄▄▄▄                                 ▄
+ ▀████▄                           ▄███
+   ▀██████▄                    ▄█████
+     ▀▀██████▄▄▄            ▄▄█████▀
+       ▀▀████████▄      ▄▄███████▀
+          ▀████████▄ ▄▄██████▀▀
+            ███████████████▀
+             ▀███████████████▄▄
+      ██████████████████████▀▀▀█▄▄
+       ██████▀▀▀▀████▀▀▀▀▀</pre>
     <h1>tern</h1>
-    <p>This instance is password protected.</p>
-    <input id="password" type="password" autocomplete="current-password" placeholder="password" autofocus>
-    <button type="submit">Unlock</button>
-    <div class="login-error" id="loginError"></div>
+    <p>Enter password to connect</p>
+    <input id="password" type="password" autocomplete="current-password" placeholder="password">
+    <button type="submit">unlock</button>
+    <div class="login-err" id="loginError"></div>
   </form>
 </div>
 
 <div id="app" class="hidden">
-  <header>
-    <div class="bar">
-      <div class="brand">tern <span id="version"></span></div>
-      <div class="spacer"></div>
-      <select class="mini" id="model" title="model"></select>
-      <select class="mini" id="effort" title="reasoning effort">
-        <option value="none">none</option>
-        <option value="low">low</option>
-        <option value="high">high</option>
-        <option value="max">max</option>
-      </select>
-      <span class="stat" id="ctx" title="context tokens"><span class="dot off" id="statusDot"></span><b>0</b></span>
-      <span class="stat optional" id="cache" title="cache hit rate"><b>0%</b> cache</span>
-      <span class="stat" id="cost" title="session cost"><b>$0.00</b></span>
-      <span class="stat optional" id="perm" title="permission mode"></span>
-      <button class="icon-btn hidden" id="logout" type="button">logout</button>
-    </div>
-  </header>
-
-  <main id="transcript">
-    <div class="empty" id="empty">
-      Ask <code>tern</code> anything about this workspace.<br>
-      Tool calls run on the host; approvals appear here.
-    </div>
-  </main>
-
-  <div id="approval" class="hidden">
-    <div class="approval-card">
-      <div class="approval-title">approval required</div>
-      <div class="approval-detail" id="apprDetail"></div>
-      <div class="approval-reason" id="apprReason"></div>
-      <pre class="approval-diff hidden" id="apprDiff"></pre>
-      <div class="approval-actions">
-        <button class="btn primary" id="allowBtn" type="button">Allow</button>
-        <button class="btn" id="allowSessionBtn" type="button">Allow for session</button>
-        <button class="btn danger" id="denyBtn" type="button">Deny</button>
+  <section class="pane-main">
+    <div id="transcript">
+      <div class="welcome" id="welcome">
+        <pre class="emblem" aria-hidden="true">▄▄▄▄                                 ▄
+ ▀████▄                           ▄███
+   ▀██████▄                    ▄█████
+     ▀▀██████▄▄▄            ▄▄█████▀
+       ▀▀████████▄      ▄▄███████▀
+          ▀████████▄ ▄▄██████▀▀
+            ███████████████▀
+             ▀███████████████▄▄
+      ██████████████████████▀▀▀█▄▄
+       ██████▀▀▀▀████▀▀▀▀▀</pre>
+        <div class="welcome-title">tern<span class="welcome-ver" id="wVer"></span></div>
+        <div class="welcome-model" id="wModel">deepseek-flash · high</div>
+        <div class="welcome-dir" id="wDir"></div>
+        <div class="welcome-hints">
+          <span>Shift+Tab</span> effort &nbsp;·&nbsp; <span>Ctrl+B</span> panel &nbsp;·&nbsp; <span>/help</span> commands
+        </div>
       </div>
     </div>
-  </div>
 
-  <footer class="composer">
-    <div class="composer-inner">
-      <textarea id="input" rows="1" placeholder="Message tern…" autocomplete="off" spellcheck="true"></textarea>
-      <div class="composer-row">
-        <span class="composer-hint" id="hint">Enter to send · Shift+Enter for newline</span>
-        <button class="btn hidden" id="cancelBtn" type="button">Cancel</button>
-        <button class="btn primary" id="sendBtn" type="button">Send</button>
+    <div id="approval" class="hidden">
+      <div class="appr-head">Approval required</div>
+      <div class="appr-detail" id="apprDetail"></div>
+      <div class="appr-reason" id="apprReason"></div>
+      <pre class="appr-diff hidden" id="apprDiff"></pre>
+      <div class="appr-actions">
+        <button class="cli-btn ok" id="allowBtn" type="button">Allow</button>
+        <button class="cli-btn" id="allowSessionBtn" type="button">Allow session</button>
+        <button class="cli-btn no" id="denyBtn" type="button">Deny</button>
       </div>
     </div>
-  </footer>
+
+    <div class="live-status" id="liveStatus">Ready</div>
+
+    <div id="slashMenu" class="hidden"></div>
+
+    <div class="composer-box" id="composerBox">
+      <span class="composer-prompt">❯</span>
+      <div class="composer-input-wrap">
+        <div class="composer-ghost" id="ghost" aria-hidden="true"></div>
+        <textarea id="input" rows="1" placeholder="Ask tern anything… (/help for commands)" autocomplete="off" spellcheck="false"></textarea>
+      </div>
+      <div class="composer-actions">
+        <button class="composer-mini stop hidden" id="cancelBtn" type="button">^C stop</button>
+        <button class="composer-mini" id="sendBtn" type="button">↵</button>
+      </div>
+    </div>
+
+    <div class="status-bar" id="statusBar"></div>
+  </section>
+
+  <div class="pane-divider"></div>
+
+  <aside class="pane-sidebar">
+    <div>
+      <div class="sb-head">CONTEXT &amp; STATS</div>
+      <div class="sb-model" id="sbModel">deepseek-flash · high</div>
+      <div class="sb-dim" id="sbVer"></div>
+      <div class="sb-dim" id="sbDir"></div>
+      <div class="sb-gauge" id="sbCtx"></div>
+      <div class="sb-gauge" id="sbCache"></div>
+      <div class="sb-stats" id="sbStats"></div>
+    </div>
+
+    <div>
+      <div class="sb-head">SESSION</div>
+      <div class="sb-controls">
+        <div class="sb-row">
+          <span class="sb-dim">model</span>
+          <select class="sb-select" id="model"></select>
+        </div>
+        <div class="sb-row">
+          <span class="sb-dim">effort</span>
+          <select class="sb-select" id="effort">
+            <option value="none">none</option>
+            <option value="low">low</option>
+            <option value="high">high</option>
+            <option value="max">max</option>
+          </select>
+        </div>
+        <div class="sb-row">
+          <span class="sb-dim">mode</span>
+          <select class="sb-select" id="perm">
+            <option value="ask">ask</option>
+            <option value="auto-edit">auto-edit</option>
+            <option value="plan">plan</option>
+            <option value="yolo">yolo</option>
+          </select>
+        </div>
+      </div>
+    </div>
+
+    <button class="sb-logout hidden" id="logout" type="button">logout</button>
+  </aside>
 </div>
 
 <script>
@@ -486,6 +585,20 @@
   "use strict";
 
   var MODELS = ["deepseek-flash", "deepseek-v4-pro"];
+  var EFFORTS = ["none", "low", "high", "max"];
+  var SLASH_COMMANDS = [
+    { name: "clear",   desc: "Clear transcript view" },
+    { name: "compact", desc: "Compact conversation context" },
+    { name: "context", desc: "Show context token usage" },
+    { name: "cost",    desc: "Show session cost & cache" },
+    { name: "effort",  desc: "Cycle or set reasoning effort" },
+    { name: "help",    desc: "Show available commands" },
+    { name: "model",   desc: "Switch model (flash / pro)" },
+    { name: "plan",    desc: "Toggle read-only plan mode" },
+    { name: "version", desc: "Show tern version" },
+    { name: "yolo",    desc: "Toggle allow-all permission mode" }
+  ];
+  var SPINNER = ["⠋","⠙","⠹","⠸","⠼","⠴","⠦","⠧","⠇","⠏"];
 
   var el = {
     login: document.getElementById("login"),
@@ -493,16 +606,11 @@
     password: document.getElementById("password"),
     loginError: document.getElementById("loginError"),
     app: document.getElementById("app"),
-    version: document.getElementById("version"),
-    model: document.getElementById("model"),
-    effort: document.getElementById("effort"),
-    ctx: document.getElementById("ctx"),
-    cache: document.getElementById("cache"),
-    cost: document.getElementById("cost"),
-    perm: document.getElementById("perm"),
-    logout: document.getElementById("logout"),
     transcript: document.getElementById("transcript"),
-    empty: document.getElementById("empty"),
+    welcome: document.getElementById("welcome"),
+    wVer: document.getElementById("wVer"),
+    wModel: document.getElementById("wModel"),
+    wDir: document.getElementById("wDir"),
     approval: document.getElementById("approval"),
     apprDetail: document.getElementById("apprDetail"),
     apprReason: document.getElementById("apprReason"),
@@ -510,21 +618,56 @@
     allowBtn: document.getElementById("allowBtn"),
     allowSessionBtn: document.getElementById("allowSessionBtn"),
     denyBtn: document.getElementById("denyBtn"),
+    liveStatus: document.getElementById("liveStatus"),
+    slashMenu: document.getElementById("slashMenu"),
+    composerBox: document.getElementById("composerBox"),
+    ghost: document.getElementById("ghost"),
     input: document.getElementById("input"),
-    hint: document.getElementById("hint"),
     sendBtn: document.getElementById("sendBtn"),
     cancelBtn: document.getElementById("cancelBtn"),
-    statusDot: document.getElementById("statusDot")
+    statusBar: document.getElementById("statusBar"),
+    sbModel: document.getElementById("sbModel"),
+    sbVer: document.getElementById("sbVer"),
+    sbDir: document.getElementById("sbDir"),
+    sbCtx: document.getElementById("sbCtx"),
+    sbCache: document.getElementById("sbCache"),
+    sbStats: document.getElementById("sbStats"),
+    model: document.getElementById("model"),
+    effort: document.getElementById("effort"),
+    perm: document.getElementById("perm"),
+    logout: document.getElementById("logout")
   };
 
   var state = {
     authEnabled: false,
     running: false,
+    usingTools: false,
+    turnStart: 0,
+    spinIdx: 0,
+    spinTimer: null,
+    status: {
+      version: "",
+      model: "deepseek-flash",
+      effort: "high",
+      permission: "ask",
+      work_dir: "",
+      context_tokens: 0,
+      context_window: 1000000,
+      cache_hit_rate: 0,
+      total_cost_usd: 0,
+      tokens_per_sec: 0,
+      uptime_sec: 0,
+      usage: {}
+    },
+    prevPerm: "ask",
     pendingApproval: null,
     turn: null,
     toolCards: {},
     es: null,
-    statusTimer: null
+    statusTimer: null,
+    slashMatches: [],
+    slashIndex: 0,
+    slashDismissed: ""
   };
 
   function api(path, opts) {
@@ -553,24 +696,21 @@
   function showLogin() {
     el.app.classList.add("hidden");
     el.login.classList.remove("hidden");
-    el.password.focus();
+    setTimeout(function () { el.password.focus(); }, 0);
   }
 
   function showApp() {
     el.login.classList.add("hidden");
     el.app.classList.remove("hidden");
     el.logout.classList.toggle("hidden", !state.authEnabled);
-    el.input.focus();
+    setTimeout(function () { el.input.focus(); }, 0);
   }
 
   el.loginForm.addEventListener("submit", function (ev) {
     ev.preventDefault();
     el.loginError.textContent = "";
     api("/api/login", { method: "POST", body: { password: el.password.value } })
-      .then(function () {
-        el.password.value = "";
-        boot();
-      })
+      .then(function () { el.password.value = ""; boot(); })
       .catch(function (err) {
         el.loginError.textContent = err.message === "unauthorized" ? "wrong password" : err.message;
       });
@@ -597,11 +737,9 @@
       refreshStatus();
       loadHistory();
       connectEvents();
-    }).catch(function (err) {
-      if (err.message !== "unauthorized") {
-        el.loginError.textContent = err.message;
-        showLogin();
-      }
+    }).catch(function () {
+      // Fallback: show app so user is never stuck on a blank screen.
+      showApp();
     });
   }
 
@@ -610,15 +748,13 @@
     var es = new EventSource("/api/events");
     state.es = es;
     es.onerror = function () {
-      // EventSource reconnects automatically; only a hard 401 needs action.
       if (es.readyState === EventSource.CLOSED) {
         setTimeout(refreshStatus, 1500);
       }
     };
-    var types = ["turn_start", "reasoning_delta", "text_delta", "steer",
-      "tool_start", "tool_end", "usage", "compact", "turn_end", "error",
-      "approval_request", "approval_resolved"];
-    types.forEach(function (type) {
+    ["turn_start", "reasoning_delta", "text_delta", "steer",
+     "tool_start", "tool_end", "usage", "compact", "turn_end", "error",
+     "approval_request", "approval_resolved"].forEach(function (type) {
       es.addEventListener(type, function (ev) {
         var data = {};
         try { data = JSON.parse(ev.data); } catch (e) { return; }
@@ -627,24 +763,13 @@
     });
   }
 
-  /* ---------------- status ---------------- */
+  /* ---------------- status & CLI rendering ---------------- */
 
   function refreshStatus() {
     return api("/api/status").then(function (st) {
-      el.version.textContent = st.version ? st.version : "";
-      fillModels(st.model);
-      el.model.value = st.model;
-      if (st.effort) { el.effort.value = st.effort; }
-      el.perm.textContent = st.permission || "";
-      setRunning(!!st.running);
-      updateStats(st);
-      if (st.pending_approval) {
-        showApproval(st.pending_approval);
-      } else if (state.pendingApproval) {
-        hideApproval();
-      }
+      applyStatus(st);
       return st;
-    }).catch(function () { /* ignore transient errors */ });
+    }).catch(function () {});
   }
 
   function scheduleStatus() {
@@ -652,13 +777,47 @@
     state.statusTimer = setTimeout(function () {
       state.statusTimer = null;
       refreshStatus();
-    }, 350);
+    }, 300);
+  }
+
+  function applyStatus(st) {
+    if (!st) { return; }
+    state.status = st;
+    var ver = st.version || "dev";
+    var effort = st.effort || "";
+    var modelLine = st.model + (effort ? " · " + effort : "");
+    el.wVer.textContent = ver;
+    el.wModel.textContent = modelLine;
+    el.wDir.textContent = st.work_dir || "";
+    el.sbModel.textContent = modelLine;
+    el.sbVer.textContent = "tern " + ver;
+    el.sbDir.textContent = st.work_dir ? shortPath(st.work_dir) : "";
+
+    fillModels(st.model);
+    el.model.value = st.model;
+    if (effort) { el.effort.value = effort; }
+    if (st.permission) { el.perm.value = st.permission; }
+
+    setRunning(!!st.running);
+    renderGauges(st);
+    renderStatusBar(st);
+
+    if (st.pending_approval) {
+      showApproval(st.pending_approval);
+    } else if (state.pendingApproval) {
+      hideApproval();
+    }
+  }
+
+  function shortPath(p) {
+    var parts = p.split(/[\\/]/).filter(Boolean);
+    if (parts.length <= 2) { return p; }
+    return "…/" + parts.slice(-2).join("/");
   }
 
   function fillModels(current) {
     var models = MODELS.slice();
     if (current && models.indexOf(current) === -1) { models.push(current); }
-    models.push("custom…");
     var existing = Array.prototype.map.call(el.model.options, function (o) { return o.value; });
     if (existing.join("\u0000") === models.join("\u0000")) { return; }
     el.model.innerHTML = "";
@@ -670,197 +829,358 @@
     });
   }
 
-  function updateStats(st) {
-    var tokens = st.context_tokens || 0;
-    var window = st.context_window || 0;
-    var pct = window > 0 ? Math.round((tokens / window) * 100) : 0;
-    el.ctx.innerHTML = "";
-    var dot = document.createElement("span");
-    dot.className = "dot " + (st.running ? "busy" : "off");
-    el.ctx.appendChild(dot);
-    var b = document.createElement("b");
-    b.textContent = formatTokens(tokens) + (window ? " · " + pct + "%" : "");
-    el.ctx.appendChild(b);
-    el.ctx.classList.toggle("warn", pct >= 80);
+  function gaugeHTML(label, pct, suffix) {
+    pct = Math.max(0, Math.min(100, Math.round(pct)));
+    var w = 12;
+    var filled = Math.round((pct * w) / 100);
+    var lbl = (label + "     ").slice(0, 5);
+    var pctStr = ("   " + pct + "%").slice(-4);
+    var bar = '<span class="bar-fill">' + "█".repeat(filled) + '</span>' +
+              '<span class="bar-empty">' + "░".repeat(w - filled) + '</span>';
+    return lbl + " " + bar + " " + pctStr + (suffix ? " " + escapeHTML(suffix) : "");
+  }
 
-    el.cache.innerHTML = "<b>" + Math.round((st.cache_hit_rate || 0) * 100) + "%</b> cache";
-    el.cost.innerHTML = "<b>" + formatCost(st.total_cost_usd || 0) + "</b>";
+  function renderGauges(st) {
+    var tokens = st.context_tokens || 0;
+    var win = st.context_window || 1000000;
+    var pct = win > 0 && tokens > 0 ? Math.round((tokens / win) * 100) : 0;
+    var suffix = tokens > 0 ? (compactTokens(tokens) + "/" + compactTokens(win)) : "";
+    el.sbCtx.innerHTML = gaugeHTML("Ctx", pct, suffix);
+    el.sbCtx.classList.toggle("warn", pct >= 80);
+
+    var cachePct = Math.round((st.cache_hit_rate || 0) * 100);
+    el.sbCache.innerHTML = gaugeHTML("Cache", cachePct, "");
+
+    var parts = [];
+    if (st.tokens_per_sec > 0) { parts.push(formatSpeed(st.tokens_per_sec)); }
+    if (st.total_cost_usd > 0) { parts.push("$" + st.total_cost_usd.toFixed(3)); }
+    parts.push(compactDuration(st.uptime_sec || 0));
+    el.sbStats.textContent = parts.join(" · ");
+  }
+
+  function renderStatusBar(st) {
+    var parts = [];
+    var mLabel = (st.model || "deepseek-flash") + (st.effort ? " (" + st.effort + ")" : "");
+    parts.push({ text: mLabel, click: cycleModel });
+    var mode = st.permission || "ask";
+    parts.push({ text: mode === "yolo" ? "YOLO" : mode, yolo: mode === "yolo", click: toggleYolo });
+    if (st.tokens_per_sec > 0) {
+      parts.push({ text: formatSpeed(st.tokens_per_sec) });
+    }
+    if (mode !== "yolo") {
+      parts.push({ text: "^Y yolo", click: toggleYolo });
+    }
+    parts.push({ text: "^B panel", click: toggleSidebar });
+
+    el.statusBar.innerHTML = "";
+    parts.forEach(function (p, i) {
+      if (i > 0) {
+        var sep = document.createElement("span");
+        sep.className = "st-sep";
+        sep.textContent = "·";
+        el.statusBar.appendChild(sep);
+      }
+      var span = document.createElement("span");
+      span.className = "st-seg" + (p.click ? " click" : "") + (p.yolo ? " yolo" : "");
+      span.textContent = p.text;
+      if (p.click) { span.addEventListener("click", p.click); }
+      el.statusBar.appendChild(span);
+    });
   }
 
   function setRunning(running) {
     if (state.running === running) { return; }
     state.running = running;
-    el.sendBtn.textContent = running ? "Steer" : "Send";
     el.cancelBtn.classList.toggle("hidden", !running);
-    if (!running) {
+    el.sendBtn.textContent = running ? "steer" : "↵";
+    if (running) {
+      state.turnStart = Date.now();
+      startSpinner();
+    } else {
+      state.usingTools = false;
+      stopSpinner();
       var caret = document.querySelector(".caret");
       if (caret) { caret.remove(); }
+      el.liveStatus.textContent = "Ready";
+      el.liveStatus.classList.remove("busy");
       state.turn = null;
-      el.statusDot.className = "dot off";
-    } else {
-      el.statusDot.className = "dot busy";
     }
   }
 
-  function formatTokens(n) {
-    if (n >= 1000000) { return (n / 1000000).toFixed(2) + "M"; }
+  function startSpinner() {
+    stopSpinner();
+    updateSpinner();
+    state.spinTimer = setInterval(updateSpinner, 120);
+  }
+
+  function stopSpinner() {
+    if (state.spinTimer) { clearInterval(state.spinTimer); state.spinTimer = null; }
+  }
+
+  function updateSpinner() {
+    if (!state.running) { return; }
+    var frame = SPINNER[state.spinIdx % SPINNER.length];
+    state.spinIdx++;
+    var sec = ((Date.now() - state.turnStart) / 1000).toFixed(1) + "s";
+    var label = state.usingTools ? "Running tools… " : "Thinking… ";
+    var speed = state.status.tokens_per_sec > 0 ? " · " + formatSpeed(state.status.tokens_per_sec) : "";
+    el.liveStatus.textContent = frame + " " + label + sec + speed;
+    el.liveStatus.classList.add("busy");
+  }
+
+  function compactTokens(n) {
+    if (n >= 1000000) { return (n / 1000000).toFixed(1) + "M"; }
     if (n >= 1000) { return (n / 1000).toFixed(1) + "k"; }
     return String(n);
   }
 
-  function formatCost(n) {
-    if (n >= 1) { return "$" + n.toFixed(2); }
-    if (n >= 0.01) { return "$" + n.toFixed(3); }
-    return "$" + n.toFixed(4);
+  function formatSpeed(v) {
+    return (v >= 10 ? Math.round(v) : v.toFixed(1)) + " tok/s";
   }
 
-  /* ---------------- model / effort ---------------- */
+  function compactDuration(sec) {
+    if (sec >= 3600) { return (sec / 3600).toFixed(1) + "h"; }
+    if (sec >= 60) { return Math.floor(sec / 60) + "m"; }
+    return sec + "s";
+  }
 
-  el.model.addEventListener("change", function () {
-    var model = el.model.value;
-    if (model === "custom…") {
-      var custom = window.prompt("Model name", "");
-      if (!custom) { refreshStatus(); return; }
-      model = custom.trim();
-    }
-    api("/api/model", { method: "POST", body: { model: model, effort: el.effort.value } })
+  /* ---------------- sidebar & status actions ---------------- */
+
+  function toggleSidebar() {
+    el.app.classList.toggle("sidebar-hidden");
+    el.input.focus();
+  }
+
+  function cycleModel() {
+    var idx = MODELS.indexOf(state.status.model);
+    var next = MODELS[(idx + 1) % MODELS.length];
+    setModel(next, state.status.effort);
+  }
+
+  function cycleEffort() {
+    var idx = EFFORTS.indexOf(state.status.effort || "high");
+    var next = EFFORTS[(idx + 1) % EFFORTS.length];
+    setModel(state.status.model, next);
+  }
+
+  function setModel(model, effort) {
+    api("/api/model", { method: "POST", body: { model: model, effort: effort } })
+      .then(applyStatus)
+      .catch(function (err) { addError(err.message); refreshStatus(); });
+  }
+
+  function setPermission(mode) {
+    api("/api/permission", { method: "POST", body: { mode: mode } })
       .then(function (st) {
-        fillModels(st.model);
-        el.model.value = st.model;
-        updateStats(st);
+        applyStatus(st);
+        addInfo("Permission mode: " + st.permission);
       })
-      .catch(function (err) { note(err.message, "error"); refreshStatus(); });
-  });
+      .catch(function (err) { addError(err.message); refreshStatus(); });
+  }
 
-  el.effort.addEventListener("change", function () {
-    api("/api/model", { method: "POST", body: { effort: el.effort.value } })
-      .then(updateStats)
-      .catch(function (err) { note(err.message, "error"); refreshStatus(); });
-  });
+  function toggleYolo() {
+    var cur = state.status.permission || "ask";
+    if (cur === "yolo") {
+      setPermission(state.prevPerm || "ask");
+    } else {
+      state.prevPerm = cur;
+      setPermission("yolo");
+    }
+  }
+
+  el.sbModel.addEventListener("click", cycleModel);
+  el.model.addEventListener("change", function () { setModel(el.model.value, el.effort.value); });
+  el.effort.addEventListener("change", function () { setModel(el.model.value, el.effort.value); });
+  el.perm.addEventListener("change", function () { setPermission(el.perm.value); });
 
   /* ---------------- history ---------------- */
 
   function loadHistory() {
     api("/api/history").then(function (h) {
       el.transcript.innerHTML = "";
-      el.transcript.appendChild(el.empty);
-      hideEmpty();
-      var messages = h.messages || [];
+      el.transcript.appendChild(el.welcome);
+      var messages = (h.messages || []).filter(function (m) { return m.role !== "system"; });
+      if (messages.length === 0) {
+        el.welcome.classList.remove("hidden");
+        return;
+      }
+      el.welcome.classList.add("hidden");
       messages.forEach(function (m) {
-        if (m.role === "system") { return; }
         if (m.role === "user") {
           addUser(m.text || "", false);
-          return;
-        }
-        if (m.role === "assistant") {
+        } else if (m.role === "assistant") {
           if (m.reasoning) { addReasoning(null, m.reasoning, false); }
-          if (m.text) { addAssistantText(null, m.text); }
-          (m.tool_calls || []).forEach(function (call) {
-            addToolCard(call.id, call.name, call.arguments);
+          if (m.text) { addAssistantText(null, m.text, false); }
+          (m.tool_calls || []).forEach(function (c) {
+            addToolCard(c.id, c.name, c.arguments);
           });
-          return;
-        }
-        if (m.role === "tool") {
-          finishToolCard(m.tool_call_id, m.name, m.text || "", m.external, 0);
+          state.turn = null;
+        } else if (m.role === "tool") {
+          finishToolCard(m.tool_call_id, m.name, m.text || "", false, 0);
         }
       });
-      if (messages.length === 0) { showEmpty(); }
-      window.scrollTo(0, document.body.scrollHeight);
-    }).catch(function () { /* ignore */ });
+      scrollBottom(true);
+    }).catch(function () {});
   }
 
   /* ---------------- transcript rendering ---------------- */
 
-  function showEmpty() { el.empty.classList.remove("hidden"); }
-  function hideEmpty() { el.empty.classList.add("hidden"); }
+  function hideWelcome() { el.welcome.classList.add("hidden"); }
 
-  function atBottom() {
-    return window.innerHeight + window.scrollY >= document.body.scrollHeight - 120;
-  }
-
-  function scrollIfNeeded(force) {
-    if (force || atBottom()) {
-      window.scrollTo(0, document.body.scrollHeight);
-    }
-  }
-
-  function makeTurn() {
-    hideEmpty();
-    var wrap = document.createElement("div");
-    wrap.className = "msg assistant";
-    var who = document.createElement("div");
-    who.className = "who";
-    who.textContent = "tern";
-    wrap.appendChild(who);
-    el.transcript.appendChild(wrap);
-    return { wrap: wrap, text: null, raw: "", reasoning: null, rawReasoning: "", reasoningWrap: null };
+  function scrollBottom(force) {
+    var t = el.transcript;
+    var near = t.scrollHeight - t.scrollTop - t.clientHeight < 120;
+    if (force || near) { t.scrollTop = t.scrollHeight; }
   }
 
   function ensureTurn() {
-    if (!state.turn) { state.turn = makeTurn(); }
+    if (!state.turn) {
+      hideWelcome();
+      var wrap = document.createElement("div");
+      wrap.className = "entry";
+      el.transcript.appendChild(wrap);
+      state.turn = { wrap: wrap, text: null, raw: "", rDetails: null, rSummary: null, rBody: null, rawR: "" };
+    }
     return state.turn;
   }
 
   function addUser(text, steer) {
-    var wrap = document.createElement("div");
-    wrap.className = "msg user" + (steer ? " steer" : "");
-    var who = document.createElement("div");
-    who.className = "who";
-    who.textContent = steer ? "you · steer" : "you";
-    var bubble = document.createElement("div");
-    bubble.className = "bubble";
-    bubble.textContent = text;
-    wrap.appendChild(who);
-    wrap.appendChild(bubble);
-    el.transcript.appendChild(wrap);
-    scrollIfNeeded(!steer);
-    return wrap;
+    hideWelcome();
+    var div = document.createElement("div");
+    div.className = "entry entry-user" + (steer ? " steer" : "");
+    div.innerHTML = '<span class="u-prompt">❯ </span><span class="u-bar">┃</span><span class="u-text"></span>';
+    div.querySelector(".u-text").textContent = text;
+    el.transcript.appendChild(div);
+    scrollBottom(true);
+    return div;
   }
 
   function addReasoning(turn, text, open) {
     turn = turn || ensureTurn();
-    if (!turn.reasoningWrap) {
-      var details = document.createElement("details");
-      details.className = "reasoning";
-      details.open = open !== false;
-      var summary = document.createElement("summary");
-      summary.textContent = "reasoning";
-      var body = document.createElement("div");
-      body.className = "text";
-      details.appendChild(summary);
-      details.appendChild(body);
-      turn.wrap.appendChild(details);
-      turn.reasoningWrap = body;
+    if (!turn.rBody) {
+      var d = document.createElement("details");
+      d.className = "entry-reasoning";
+      d.open = !!open;
+      var s = document.createElement("summary");
+      var b = document.createElement("div");
+      b.className = "r-body";
+      d.appendChild(s);
+      d.appendChild(b);
+      turn.wrap.appendChild(d);
+      turn.rDetails = d;
+      turn.rSummary = s;
+      turn.rBody = b;
     }
-    turn.rawReasoning += text;
-    turn.reasoningWrap.textContent = turn.rawReasoning;
+    turn.rawR += text;
+    turn.rSummary.textContent = "Thought · " + turn.rawR.length + " chars";
+    turn.rBody.textContent = turn.rawR;
+    scrollBottom(false);
   }
 
-  function addAssistantText(turn, text) {
+  function addAssistantText(turn, text, streaming) {
     turn = turn || ensureTurn();
     if (!turn.text) {
       var body = document.createElement("div");
-      body.className = "body";
+      body.className = "entry-assistant";
       turn.wrap.appendChild(body);
       turn.text = body;
     }
     turn.raw += text;
     turn.text.innerHTML = renderMarkdown(turn.raw);
-    var caret = document.createElement("span");
-    caret.className = "caret";
-    turn.text.appendChild(caret);
+    if (streaming !== false) {
+      var caret = document.createElement("span");
+      caret.className = "caret";
+      turn.text.appendChild(caret);
+    }
+    scrollBottom(false);
+  }
+
+  function addToolCard(id, name, args) {
+    hideWelcome();
+    var div = document.createElement("div");
+    div.className = "entry-tool";
+    var line = document.createElement("div");
+    line.className = "tool-line";
+    var nm = document.createElement("span");
+    nm.className = "tool-name";
+    nm.textContent = "⚙ " + (name || "tool");
+    var sum = document.createElement("span");
+    sum.className = "tool-summary";
+    var s = summarizeArgs(args);
+    sum.textContent = s ? "· " + s : "";
+    var meta = document.createElement("span");
+    meta.className = "tool-meta";
+    meta.textContent = "· running…";
+    line.appendChild(nm);
+    line.appendChild(sum);
+    line.appendChild(meta);
+    var out = document.createElement("div");
+    out.className = "tool-out hidden";
+    line.addEventListener("click", function () { out.classList.toggle("hidden"); });
+    div.appendChild(line);
+    div.appendChild(out);
+    (state.turn ? state.turn.wrap : el.transcript).appendChild(div);
+    if (id) { state.toolCards[id] = { div: div, meta: meta, out: out }; }
+    scrollBottom(false);
+    return div;
+  }
+
+  function finishToolCard(id, name, output, isError, durationMs) {
+    var ref = id ? state.toolCards[id] : null;
+    if (!ref) {
+      var d = addToolCard(null, name, "");
+      ref = { div: d, meta: d.querySelector(".tool-meta"), out: d.querySelector(".tool-out") };
+      if (id) { state.toolCards[id] = ref; }
+    }
+    if (isError) { ref.div.classList.add("error"); ref.out.classList.remove("hidden"); }
+    ref.meta.textContent = "· " + (isError ? "failed" : (durationMs ? durationMs + "ms" : "done"));
+    ref.out.textContent = output || "(no output)";
+    scrollBottom(false);
+  }
+
+  function summarizeArgs(args) {
+    if (args === undefined || args === null) { return ""; }
+    var obj = args;
+    if (typeof args === "string") {
+      try { obj = JSON.parse(args); } catch (e) { return args.slice(0, 80); }
+    }
+    if (typeof obj !== "object" || obj === null) { return String(obj); }
+    if (obj.command) { return obj.command; }
+    if (obj.path) { return obj.path; }
+    if (obj.file_path) { return obj.file_path; }
+    if (obj.pattern) { return obj.pattern; }
+    var keys = Object.keys(obj);
+    if (!keys.length) { return ""; }
+    var v = obj[keys[0]];
+    return typeof v === "string" ? v.slice(0, 80) : JSON.stringify(obj).slice(0, 80);
+  }
+
+  function addInfo(text) {
+    hideWelcome();
+    var div = document.createElement("div");
+    div.className = "entry entry-info";
+    div.textContent = text;
+    el.transcript.appendChild(div);
+    scrollBottom(true);
+  }
+
+  function addError(text) {
+    hideWelcome();
+    var div = document.createElement("div");
+    div.className = "entry entry-error";
+    div.textContent = text;
+    el.transcript.appendChild(div);
+    scrollBottom(true);
   }
 
   function renderMarkdown(src) {
     if (!src) { return ""; }
-    // Split out fenced code blocks first so their contents stay verbatim.
     var parts = src.split(/```/);
     var out = "";
     parts.forEach(function (part, i) {
       if (i % 2 === 1) {
-        var body = part;
-        var nl = body.indexOf("\n");
-        if (nl !== -1) { body = body.slice(nl + 1); }
+        var nl = part.indexOf("\n");
+        var body = nl !== -1 ? part.slice(nl + 1) : part;
         out += "<pre><code>" + escapeHTML(body.replace(/\n$/, "")) + "</code></pre>";
         return;
       }
@@ -881,97 +1201,23 @@
       html = html.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
       html = html.replace(/(^|[\s(])\*([^*\n]+)\*/g, "$1<em>$2</em>");
       html = html.replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g, '<a href="$2" target="_blank" rel="noreferrer noopener">$1</a>');
-      html = html.replace(/^### (.+)$/gm, "<strong>$1</strong>");
-      html = html.replace(/^## (.+)$/gm, "<strong>$1</strong>");
-      html = html.replace(/^# (.+)$/gm, "<strong>$1</strong>");
+      html = html.replace(/^### (.+)$/gm, "<h3>$1</h3>");
+      html = html.replace(/^## (.+)$/gm, "<h2>$1</h2>");
+      html = html.replace(/^# (.+)$/gm, "<h1>$1</h1>");
       html = html.replace(/^\s*[-*] (.+)$/gm, "<li>$1</li>");
       html = html.replace(/(<li>[\s\S]*?<\/li>)/g, "<ul>$1</ul>");
-      out += html;
+      html = html.replace(/\n\n+/g, "</p><p>");
+      html = html.replace(/\n/g, "<br>");
+      out += "<p>" + html + "</p>";
     });
     return out;
   }
 
   function escapeHTML(s) {
-    return String(s)
-      .replace(/&/g, "&amp;")
-      .replace(/</g, "&lt;")
-      .replace(/>/g, "&gt;")
-      .replace(/"/g, "&quot;");
+    return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
   }
 
-  function addToolCard(id, name, args) {
-    var card = document.createElement("div");
-    card.className = "tool";
-    var head = document.createElement("div");
-    head.className = "tool-head";
-    var nameEl = document.createElement("span");
-    nameEl.className = "tool-name";
-    nameEl.textContent = name || "tool";
-    var argsEl = document.createElement("span");
-    argsEl.className = "tool-args";
-    argsEl.textContent = summarizeArgs(args);
-    var meta = document.createElement("span");
-    meta.className = "tool-meta";
-    meta.textContent = "running…";
-    head.appendChild(nameEl);
-    head.appendChild(argsEl);
-    head.appendChild(meta);
-    var body = document.createElement("div");
-    body.className = "tool-body hidden";
-    var pre = document.createElement("pre");
-    body.appendChild(pre);
-    head.addEventListener("click", function () {
-      body.classList.toggle("hidden");
-    });
-    card.appendChild(head);
-    card.appendChild(body);
-    (state.turn ? state.turn.wrap : el.transcript).appendChild(card);
-    if (id) { state.toolCards[id] = { card: card, meta: meta, pre: pre, body: body }; }
-    scrollIfNeeded(false);
-    return card;
-  }
-
-  function finishToolCard(id, name, output, isError, durationMs) {
-    var ref = id ? state.toolCards[id] : null;
-    if (!ref) {
-      var card = addToolCard(null, name, "");
-      ref = { card: card, meta: card.querySelector(".tool-meta"), pre: card.querySelector("pre"), body: card.querySelector(".tool-body") };
-      if (id) { state.toolCards[id] = ref; }
-    }
-    if (isError) { ref.card.classList.add("error"); }
-    ref.meta.textContent = (isError ? "error" : "done") + (durationMs ? " · " + durationMs + "ms" : "");
-    ref.pre.textContent = output || "(no output)";
-    if (isError) { ref.body.classList.remove("hidden"); }
-    scrollIfNeeded(false);
-  }
-
-  function summarizeArgs(args) {
-    if (args === undefined || args === null) { return ""; }
-    var obj = args;
-    if (typeof args === "string") {
-      try { obj = JSON.parse(args); } catch (e) { return args; }
-    }
-    if (typeof obj !== "object" || obj === null) { return String(obj); }
-    if (obj.command) { return obj.command; }
-    if (obj.path) { return obj.path; }
-    if (obj.file_path) { return obj.file_path; }
-    var keys = Object.keys(obj);
-    if (keys.length === 0) { return ""; }
-    var first = keys[0];
-    var val = obj[first];
-    if (typeof val === "string") { return val; }
-    return JSON.stringify(obj).slice(0, 120);
-  }
-
-  function note(text, kind) {
-    var div = document.createElement("div");
-    div.className = "note" + (kind ? " " + kind : "");
-    div.textContent = text;
-    el.transcript.appendChild(div);
-    scrollIfNeeded(false);
-  }
-
-  /* ---------------- events ---------------- */
+  /* ---------------- SSE events ---------------- */
 
   function handleEvent(type, ev) {
     switch (type) {
@@ -980,56 +1226,46 @@
         state.turn = null;
         break;
       case "reasoning_delta":
-        addReasoning(null, ev.text || "");
-        scrollIfNeeded(false);
+        addReasoning(null, ev.text || "", false);
         break;
       case "text_delta":
-        addAssistantText(null, ev.text || "");
-        if (state.turn && state.turn.reasoningWrap) {
-          var details = state.turn.reasoningWrap.parentElement;
-          if (details && details.open) { details.open = false; }
-        }
-        scrollIfNeeded(false);
+        addAssistantText(null, ev.text || "", true);
         break;
       case "steer":
         addUser(ev.message || ev.text || "", true);
         break;
       case "tool_start":
+        state.usingTools = true;
         addToolCard(ev.tool_call_id, ev.tool_name, ev.args);
         break;
       case "tool_end":
+        state.usingTools = false;
         finishToolCard(ev.tool_call_id, ev.tool_name, ev.output || "", !!ev.is_error, ev.duration_ms || 0);
         break;
       case "usage":
+        if (ev.tokens_per_sec > 0) { state.status.tokens_per_sec = ev.tokens_per_sec; }
         scheduleStatus();
         break;
       case "compact":
         var info = ev.compact || {};
-        note("context compacted · " + (info.messages_summarized || 0) + " messages summarized", "compact");
+        addInfo("⟳ Context compacted (" + (info.messages_before || 0) + " → " + (info.messages_after || 0) + " messages)");
         state.turn = null;
+        scheduleStatus();
         break;
       case "turn_end":
-        if (ev.text && state.turn && !state.turn.raw) {
-          addAssistantText(null, ev.text);
+        var finalText = ev.message || ev.text || "";
+        if (finalText && (!state.turn || !state.turn.raw)) {
+          addAssistantText(null, finalText, false);
         }
         setRunning(false);
         refreshStatus();
-        scrollIfNeeded(true);
-        state.turn = null;
+        scrollBottom(true);
         break;
       case "error":
-        note(ev.message || "error", "error");
+        addError(ev.message || "error");
         break;
       case "approval_request":
-        showApproval({
-          id: ev.id,
-          tool_name: ev.tool_name,
-          args: ev.args,
-          reason: ev.reason,
-          path: ev.path,
-          command: ev.command,
-          diff: ev.diff
-        });
+        showApproval(ev);
         break;
       case "approval_resolved":
         if (state.pendingApproval && state.pendingApproval.id === ev.id) { hideApproval(); }
@@ -1050,7 +1286,6 @@
       el.apprDiff.textContent = req.diff;
       el.apprDiff.classList.remove("hidden");
     } else {
-      el.apprDiff.textContent = "";
       el.apprDiff.classList.add("hidden");
     }
     el.approval.classList.remove("hidden");
@@ -1061,30 +1296,134 @@
     el.approval.classList.add("hidden");
   }
 
-  function answer(decision) {
+  function answerApproval(decision) {
     if (!state.pendingApproval) { return; }
     var id = state.pendingApproval.id;
-    [el.allowBtn, el.allowSessionBtn, el.denyBtn].forEach(function (b) { b.disabled = true; });
     api("/api/approve", { method: "POST", body: { id: id, decision: decision } })
-      .then(function () {
-        hideApproval();
-      })
-      .catch(function (err) { note(err.message, "error"); })
-      .then(function () {
-        [el.allowBtn, el.allowSessionBtn, el.denyBtn].forEach(function (b) { b.disabled = false; });
-        refreshStatus();
-      });
+      .then(hideApproval)
+      .catch(function (err) { addError(err.message); })
+      .then(refreshStatus);
   }
 
-  el.allowBtn.addEventListener("click", function () { answer("allow"); });
-  el.allowSessionBtn.addEventListener("click", function () { answer("allow_session"); });
-  el.denyBtn.addEventListener("click", function () { answer("deny"); });
+  el.allowBtn.addEventListener("click", function () { answerApproval("allow"); });
+  el.allowSessionBtn.addEventListener("click", function () { answerApproval("allow_session"); });
+  el.denyBtn.addEventListener("click", function () { answerApproval("deny"); });
 
-  /* ---------------- composer ---------------- */
+  /* ---------------- live slash-command autocomplete ---------------- */
+
+  function syncSlashMenu() {
+    var raw = el.input.value;
+    if (!raw.startsWith("/") || /\s/.test(raw) || raw === state.slashDismissed) {
+      clearSlashMenu(raw === state.slashDismissed);
+      return;
+    }
+    state.slashDismissed = "";
+    var query = raw.slice(1).toLowerCase();
+    var matches = SLASH_COMMANDS.filter(function (c) { return c.name.startsWith(query); });
+    if (!matches.length) {
+      clearSlashMenu(false);
+      return;
+    }
+    state.slashMatches = matches;
+    if (state.slashIndex >= matches.length) { state.slashIndex = 0; }
+    renderSlashMenu();
+    updateGhost();
+  }
+
+  function clearSlashMenu(keepDismissed) {
+    state.slashMatches = [];
+    state.slashIndex = 0;
+    if (!keepDismissed) { state.slashDismissed = ""; }
+    el.slashMenu.classList.add("hidden");
+    el.slashMenu.innerHTML = "";
+    el.ghost.innerHTML = "";
+  }
+
+  function updateGhost() {
+    if (!state.slashMatches.length) { el.ghost.innerHTML = ""; return; }
+    var raw = el.input.value;
+    var typed = raw.slice(1);
+    var target = state.slashMatches[state.slashIndex].name;
+    if (target.length > typed.length && target.toLowerCase().startsWith(typed.toLowerCase())) {
+      el.ghost.innerHTML = escapeHTML(raw) + '<span class="g-tail">' + escapeHTML(target.slice(typed.length)) + '</span>';
+    } else {
+      el.ghost.innerHTML = "";
+    }
+  }
+
+  function renderSlashMenu() {
+    el.slashMenu.innerHTML = "";
+    state.slashMatches.slice(0, 6).forEach(function (item, i) {
+      var row = document.createElement("div");
+      row.className = "slash-row" + (i === state.slashIndex ? " active" : "");
+      row.innerHTML =
+        '<span class="slash-marker">' + (i === state.slashIndex ? "▸" : "") + '</span>' +
+        '<span class="slash-cmd">/' + escapeHTML(item.name) + '</span>' +
+        '<span class="slash-desc">' + escapeHTML(item.desc) + '</span>';
+      row.addEventListener("mousedown", function (ev) {
+        ev.preventDefault();
+        el.input.value = "/" + item.name;
+        clearSlashMenu(false);
+        send();
+      });
+      el.slashMenu.appendChild(row);
+    });
+    el.slashMenu.classList.remove("hidden");
+  }
+
+  function handleSlashCommand(line) {
+    var parts = line.slice(1).trim().split(/\s+/);
+    var cmd = (parts[0] || "").toLowerCase();
+    var arg = parts.slice(1).join(" ");
+    switch (cmd) {
+      case "help":
+        addInfo(SLASH_COMMANDS.map(function (c) { return "/" + c.name + " — " + c.desc; }).join("\n"));
+        return true;
+      case "clear":
+        el.transcript.innerHTML = "";
+        el.transcript.appendChild(el.welcome);
+        el.welcome.classList.remove("hidden");
+        return true;
+      case "version":
+        addInfo("tern " + (state.status.version || "dev"));
+        return true;
+      case "context":
+        var t = state.status.context_tokens || 0;
+        var w = state.status.context_window || 1000000;
+        addInfo("Context: " + t + " / " + w + " tokens (" + ((t / w) * 100).toFixed(1) + "%)");
+        return true;
+      case "cost":
+        var u = state.status.usage || {};
+        addInfo("Cost: $" + (state.status.total_cost_usd || 0).toFixed(4) +
+          " · " + (u.prompt_tokens || 0) + " prompt, " + (u.completion_tokens || 0) + " completion" +
+          " · " + Math.round((state.status.cache_hit_rate || 0) * 100) + "% cache");
+        return true;
+      case "model":
+        if (arg) { setModel(arg, state.status.effort); } else { cycleModel(); }
+        return true;
+      case "effort":
+        if (arg) { setModel(state.status.model, arg); } else { cycleEffort(); }
+        return true;
+      case "yolo":
+        toggleYolo();
+        return true;
+      case "plan":
+        setPermission(state.status.permission === "plan" ? "ask" : "plan");
+        return true;
+      case "compact":
+        api("/api/compact", { method: "POST", body: { instructions: arg } })
+          .then(function (r) { if (r.status) { applyStatus(r.status); } })
+          .catch(function (err) { addError(err.message); });
+        return true;
+    }
+    return false;
+  }
+
+  /* ---------------- composer & global CLI shortcuts ---------------- */
 
   function autosize() {
     el.input.style.height = "auto";
-    el.input.style.height = Math.min(el.input.scrollHeight, window.innerHeight * 0.4) + "px";
+    el.input.style.height = Math.min(el.input.scrollHeight, window.innerHeight * 0.3) + "px";
   }
 
   function send() {
@@ -1092,41 +1431,112 @@
     if (!text) { return; }
     el.input.value = "";
     autosize();
+    clearSlashMenu(false);
+
+    if (text.startsWith("/") && handleSlashCommand(text)) {
+      el.input.focus();
+      return;
+    }
+
     var steer = state.running;
     var userNode = steer ? null : addUser(text, false);
     api("/api/prompt", { method: "POST", body: { text: text } })
       .then(function (res) {
         if (res.steered) {
-          if (userNode) {
-            userNode.classList.add("steer");
-            userNode.querySelector(".who").textContent = "you · steer";
-          } else {
-            addUser(text, true);
-          }
+          if (userNode) { userNode.classList.add("steer"); }
+          else { addUser(text, true); }
           return;
         }
         setRunning(true);
       })
-      .catch(function (err) { note(err.message, "error"); });
+      .catch(function (err) { addError(err.message); });
+    el.input.focus();
   }
 
-  el.sendBtn.addEventListener("click", send);
+  function cancelTurn() {
+    api("/api/cancel", { method: "POST" }).then(refreshStatus).catch(function (err) { addError(err.message); });
+  }
 
-  el.cancelBtn.addEventListener("click", function () {
-    api("/api/cancel", { method: "POST" })
-      .then(function () { refreshStatus(); })
-      .catch(function (err) { note(err.message, "error"); });
+  el.composerBox.addEventListener("click", function () { el.input.focus(); });
+  el.sendBtn.addEventListener("click", send);
+  el.cancelBtn.addEventListener("click", cancelTurn);
+
+  el.input.addEventListener("input", function () {
+    autosize();
+    syncSlashMenu();
   });
 
   el.input.addEventListener("keydown", function (ev) {
+    if (state.slashMatches.length) {
+      if (ev.key === "ArrowDown") {
+        ev.preventDefault();
+        state.slashIndex = (state.slashIndex + 1) % state.slashMatches.length;
+        renderSlashMenu();
+        updateGhost();
+        return;
+      }
+      if (ev.key === "ArrowUp") {
+        ev.preventDefault();
+        state.slashIndex = (state.slashIndex - 1 + state.slashMatches.length) % state.slashMatches.length;
+        renderSlashMenu();
+        updateGhost();
+        return;
+      }
+      if (ev.key === "Tab") {
+        ev.preventDefault();
+        el.input.value = "/" + state.slashMatches[state.slashIndex].name + " ";
+        clearSlashMenu(false);
+        autosize();
+        return;
+      }
+      if (ev.key === "Escape") {
+        ev.preventDefault();
+        state.slashDismissed = el.input.value;
+        clearSlashMenu(true);
+        return;
+      }
+      if (ev.key === "Enter" && !ev.shiftKey && !ev.isComposing) {
+        ev.preventDefault();
+        el.input.value = "/" + state.slashMatches[state.slashIndex].name;
+        clearSlashMenu(false);
+        send();
+        return;
+      }
+    }
     if (ev.key === "Enter" && !ev.shiftKey && !ev.isComposing) {
       ev.preventDefault();
       send();
     }
   });
-  el.input.addEventListener("input", autosize);
 
-  el.hint.textContent = "Enter to send · Shift+Enter for newline";
+  // Global CLI ergonomics: typing anywhere focuses the composer; Ctrl+B / Ctrl+Y / Shift+Tab work like the TUI.
+  document.addEventListener("keydown", function (ev) {
+    if (!el.login.classList.contains("hidden")) { return; }
+    if ((ev.ctrlKey || ev.metaKey) && ev.key.toLowerCase() === "b") {
+      ev.preventDefault();
+      toggleSidebar();
+      return;
+    }
+    if (ev.ctrlKey && ev.key.toLowerCase() === "y") {
+      ev.preventDefault();
+      toggleYolo();
+      return;
+    }
+    if (ev.shiftKey && ev.key === "Tab") {
+      ev.preventDefault();
+      cycleEffort();
+      return;
+    }
+    if (ev.key === "Escape" && state.running) {
+      cancelTurn();
+      return;
+    }
+    var tag = (document.activeElement && document.activeElement.tagName) || "";
+    if (tag !== "TEXTAREA" && tag !== "INPUT" && tag !== "SELECT" &&
+        !ev.ctrlKey && !ev.metaKey && !ev.altKey && ev.key.length === 1) {
+      el.input.focus();
+    }
+  });
 
   boot();
 })();

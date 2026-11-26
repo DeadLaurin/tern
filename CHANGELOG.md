@@ -4,6 +4,15 @@ All notable changes to tern are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and tern adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v0.4.1] - 2026-11-26
+
+### Changed
+- Redesigned the `tern serve` web UI to match the `tern` CLI two-pane terminal aesthetic (welcome emblem, `❯ ┃` transcript, `▸ Thought` blocks, `⚙ tool` lines, `CONTEXT & STATS` block gauges, and clickable bottom status bar).
+- Added live `/` command autocomplete with inline ghost text, global terminal-style keyboard focus, `Ctrl+B` / `Ctrl+Y` / `Shift+Tab` shortcuts, and `/api/permission` + `/api/compact` endpoints to `tern serve`.
+
+### Fixed
+- Fixed `tern serve` composer focus, welcome hiding on user prompt, and `turn_end` message rendering so typing and submitting work immediately.
+
 ## [v0.4.0] - 2026-11-26
 
 ### Added
@@ -54,6 +63,7 @@ All notable changes to tern are documented here. The format is based on
 - `tern doctor` section headers render in order.
 - All `IsParallelSafe` tools, including task sub-agents, run concurrently.
 
+[v0.4.1]: https://github.com/DeadLaurin/tern/compare/v0.4.0...v0.4.1
 [v0.4.0]: https://github.com/DeadLaurin/tern/compare/v0.3.2...v0.4.0
 [v0.3.2]: https://github.com/DeadLaurin/tern/compare/v0.3.1...v0.3.2
 [v0.3.1]: https://github.com/DeadLaurin/tern/compare/v0.3.0...v0.3.1
