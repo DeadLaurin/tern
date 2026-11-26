@@ -98,6 +98,8 @@ func runWithOptions(o runOptions) int {
 			return runConfigCommand(o.Args[1:], o)
 		case "stats":
 			return runStatsCommand(o.Args[1:], o)
+		case "doctor":
+			return runDoctorCommand(o.Args[1:], o)
 		case "ext":
 			return runExtCommand(o.Args[1:], o)
 		case "update":
@@ -326,6 +328,7 @@ Usage:
   tern [flags]
   tern config
   tern stats [--json]
+  tern doctor [--json]
   tern ext [list] [--json]
   tern ext install <path-or-git-url>
   tern ext remove <name>
@@ -357,6 +360,7 @@ Flags:
 Subcommands:
   config                    print the effective configuration
   stats                     show historical usage and activity
+  doctor                    diagnose the installation, toolchain and workspace
   ext                       list, install or remove extensions
   undo [n]                  roll back the last n checkpoint turns
   log                       list checkpoint turns for the latest session

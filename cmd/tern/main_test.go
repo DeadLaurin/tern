@@ -1157,3 +1157,137 @@ func TestPolicyCommand(t *testing.T) {
 		t.Fatalf("policy --plan output = %s", planOut.String())
 	}
 }
+
+func TestDoctorCommandTextAndJSON(t *testing.T) {
+	o := testRunOptions(t)
+	configDir := os.Getenv("TERN_CONFIG_DIR")
+	dataDir := os.Getenv("TERN_DATA_DIR")
+
+	// Workspace file so the repo index reports at least one file.
+	if err := os.WriteFile(filepath.Join(o.WorkDir, "main.go"), []byte("package main\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// One global skill.
+	skillsDir := filepath.Join(configDir, "skills")
+	if err := os.MkdirAll(skillsDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(skillsDir, "demo.md"), []byte("---\nname: demo\ndescription: demo skill\n---\nbody\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// One hook and one MCP server.
+	if err := os.WriteFile(filepath.Join(configDir, "hooks.toml"), []byte("[[hooks]]\nevent = \"session_start\"\ncommand = \"echo hi\"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(configDir, "mcp.toml"), []byte("[[servers]]\nname = \"demo\"\ncommand = \"demo-server\"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// One saved session.
+	store, err := session.NewStore(dataDir)
+	if err != nil {
+		t.Fatalf("NewStore: %v", err)
+	}
+	if _, err := store.Create(session.SessionMeta{
+		ID:      "session-doctor",
+		Name:    "Doctor Session",
+		Model:   "mock-model",
+		WorkDir: o.WorkDir,
+	}); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	o.Args = []string{"doctor"}
+	if code := runWithOptions(o); code != 0 {
+		t.Fatalf("tern doctor exit %d, stderr: %s", code, o.Err.(*bytes.Buffer).String())
+	}
+	text := o.Out.(*bytes.Buffer).String()
+	for _, want := range []string{
+		"tern doctor",
+		"Version",
+		"OS/arch",
+		"Config dir",
+		"Data dir",
+		"Work dir",
+		"Model",
+		"API key",
+		"[set]",
+		"ripgrep",
+		"git",
+		"shell",
+		"Repo index",
+		"Skills",
+		"Extensions",
+		"MCP servers",
+		"Hooks",
+		"Saved sessions",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("doctor output missing %q:\n%s", want, text)
+		}
+	}
+	if strings.Contains(text, "test-secret-key") {
+		t.Fatalf("doctor output leaked the API key:\n%s", text)
+	}
+
+	jsonOut := &bytes.Buffer{}
+	jsonErr := &bytes.Buffer{}
+	jsonOpts := o
+	jsonOpts.Args = []string{"doctor", "--json"}
+	jsonOpts.Out = jsonOut
+	jsonOpts.Err = jsonErr
+	if code := runWithOptions(jsonOpts); code != 0 {
+		t.Fatalf("tern doctor --json exit %d, stderr: %s", code, jsonErr.String())
+	}
+	if strings.Contains(jsonOut.String(), "test-secret-key") {
+		t.Fatalf("doctor JSON leaked the API key:\n%s", jsonOut.String())
+	}
+	var got doctorReport
+	if err := json.Unmarshal(jsonOut.Bytes(), &got); err != nil {
+		t.Fatalf("doctor JSON is invalid: %v\n%s", err, jsonOut.String())
+	}
+	if got.Version != "test" || got.WorkDir != o.WorkDir {
+		t.Fatalf("unexpected version/workdir: %+v", got)
+	}
+	if got.OS != runtime.GOOS || got.Arch != runtime.GOARCH {
+		t.Fatalf("unexpected platform: %s/%s", got.OS, got.Arch)
+	}
+	if got.APIKey != "[set]" {
+		t.Fatalf("api_key status = %q, want [set]", got.APIKey)
+	}
+	if got.ConfigDir != configDir || got.DataDir != dataDir {
+		t.Fatalf("unexpected dirs: config=%q data=%q", got.ConfigDir, got.DataDir)
+	}
+	if got.Workspace.RepoFiles < 1 {
+		t.Fatalf("repo index did not see workspace files: %+v", got.Workspace)
+	}
+	if got.Workspace.Skills != 1 || got.Workspace.Hooks != 1 || got.Workspace.MCPServers != 1 {
+		t.Fatalf("unexpected workspace counts: %+v", got.Workspace)
+	}
+	if got.Workspace.SavedSessions != 1 {
+		t.Fatalf("saved sessions = %d, want 1", got.Workspace.SavedSessions)
+	}
+	if got.Toolchain.Shell == "" || got.Toolchain.ShellSource == "" {
+		t.Fatalf("shell not reported: %+v", got.Toolchain)
+	}
+
+	// A loopback provider needs no hosted API key and is reported as local.
+	t.Setenv("TERN_BASE_URL", "http://localhost:11434/v1")
+	localOut := &bytes.Buffer{}
+	localOpts := o
+	localOpts.Args = []string{"doctor", "--json"}
+	localOpts.Out = localOut
+	localOpts.Err = &bytes.Buffer{}
+	if code := runWithOptions(localOpts); code != 0 {
+		t.Fatalf("tern doctor --json (local) exit %d", code)
+	}
+	var localReport doctorReport
+	if err := json.Unmarshal(localOut.Bytes(), &localReport); err != nil {
+		t.Fatalf("doctor local JSON is invalid: %v", err)
+	}
+	if localReport.APIKey != "[local]" {
+		t.Fatalf("api_key status = %q, want [local]", localReport.APIKey)
+	}
+	if strings.Contains(localOut.String(), "test-secret-key") {
+		t.Fatalf("doctor local JSON leaked the API key:\n%s", localOut.String())
+	}
+}
