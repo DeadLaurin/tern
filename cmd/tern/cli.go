@@ -95,6 +95,8 @@ func runWithOptions(o runOptions) int {
 			return runConfigCommand(o.Args[1:], o)
 		case "stats":
 			return runStatsCommand(o.Args[1:], o)
+		case "ext":
+			return runExtCommand(o.Args[1:], o)
 		case "update":
 			return runUpdateCommand(o.Args[1:], o.Out, o.Err)
 		case "uninstall":
@@ -307,6 +309,9 @@ Usage:
   tern [flags]
   tern config
   tern stats [--json]
+  tern ext [list] [--json]
+  tern ext install <path-or-git-url>
+  tern ext remove <name>
   tern update [--check] [--force]
   tern uninstall [--yes] [--purge] [--dry-run]
   tern version
@@ -325,7 +330,15 @@ Flags:
       --max-agents <n>      maximum concurrent sub-agents
       --debug-cache         log prefix hashes and cache divergence
       --version             print the version
-  -h, --help                show this help`)
+  -h, --help                show this help
+
+Subcommands:
+  config                    print the effective configuration
+  stats                     show historical usage and activity
+  ext                       list, install or remove extensions
+  update                    update the tern binary
+  uninstall                 remove the tern binary
+  version                   print the version`)
 }
 
 func loadConfig(opts *cliOptions, workDir string) (*config.Config, error) {

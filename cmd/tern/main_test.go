@@ -21,8 +21,10 @@ import (
 	"time"
 
 	"github.com/tern-agent/tern/internal/agent"
+	"github.com/tern-agent/tern/internal/config"
 	"github.com/tern-agent/tern/internal/provider"
 	"github.com/tern-agent/tern/internal/session"
+	"github.com/tern-agent/tern/internal/tools"
 )
 
 func testRunOptions(t *testing.T) runOptions {
@@ -776,4 +778,154 @@ func TestUninstallDryRunYesAndPurge(t *testing.T) {
 			t.Fatalf("binary was removed without confirmation: %v", err)
 		}
 	})
+}
+
+// writeTestExtension creates a minimal extension directory with one tool and
+// returns its path.
+func writeTestExtension(t *testing.T, dir, name string, enabled bool) string {
+	t.Helper()
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	manifest := "name = \"" + name + "\"\n" +
+		"version = \"1.2.3\"\n" +
+		"description = \"test extension\"\n" +
+		"enabled = " + map[bool]string{true: "true", false: "false"}[enabled] + "\n" +
+		"\n[[tools]]\n" +
+		"name = \"echo\"\n" +
+		"description = \"echo the arguments\"\n" +
+		"command = \"sh\"\n" +
+		"args = [\"-c\", \"cat\"]\n" +
+		"read_only = true\n"
+	if err := os.WriteFile(filepath.Join(dir, "extension.toml"), []byte(manifest), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return dir
+}
+
+func TestExtInstallListRemove(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("extension tool fixture uses sh")
+	}
+	o := testRunOptions(t)
+	src := writeTestExtension(t, filepath.Join(t.TempDir(), "src-ext"), "demo", true)
+
+	o.Args = []string{"ext", "install", src}
+	if code := runWithOptions(o); code != 0 {
+		t.Fatalf("ext install exit %d, stderr: %s", code, o.Err.(*bytes.Buffer).String())
+	}
+	out := o.Out.(*bytes.Buffer).String()
+	if !strings.Contains(out, `"demo"`) || !strings.Contains(out, "1.2.3") {
+		t.Fatalf("ext install output missing details:\n%s", out)
+	}
+	installedDir := filepath.Join(os.Getenv("TERN_CONFIG_DIR"), "extensions", "demo")
+	if _, err := os.Stat(installedDir); err != nil {
+		t.Fatalf("extension not installed at %s: %v", installedDir, err)
+	}
+
+	// Duplicate install is rejected.
+	o.Out.(*bytes.Buffer).Reset()
+	o.Err.(*bytes.Buffer).Reset()
+	o.Args = []string{"ext", "install", src}
+	if code := runWithOptions(o); code != 1 {
+		t.Fatalf("duplicate ext install exit %d, want 1", code)
+	}
+
+	o.Out.(*bytes.Buffer).Reset()
+	o.Err.(*bytes.Buffer).Reset()
+	o.Args = []string{"ext", "list", "--json"}
+	if code := runWithOptions(o); code != 0 {
+		t.Fatalf("ext list exit %d, stderr: %s", code, o.Err.(*bytes.Buffer).String())
+	}
+	var entries []extListEntry
+	if err := json.Unmarshal(o.Out.(*bytes.Buffer).Bytes(), &entries); err != nil {
+		t.Fatalf("ext list --json: %v\n%s", err, o.Out.(*bytes.Buffer).String())
+	}
+	if len(entries) != 1 {
+		t.Fatalf("ext list returned %d entries: %+v", len(entries), entries)
+	}
+	e := entries[0]
+	if e.Name != "demo" || e.Version != "1.2.3" || e.Source != "global" || !e.Enabled {
+		t.Fatalf("unexpected entry: %+v", e)
+	}
+	if e.Tools != 1 || e.Hooks != 0 || e.MCP != 0 {
+		t.Fatalf("unexpected counts: %+v", e)
+	}
+
+	o.Out.(*bytes.Buffer).Reset()
+	o.Args = []string{"ext", "list"}
+	if code := runWithOptions(o); code != 0 {
+		t.Fatalf("ext list exit %d, stderr: %s", code, o.Err.(*bytes.Buffer).String())
+	}
+	if text := o.Out.(*bytes.Buffer).String(); !strings.Contains(text, "demo") || !strings.Contains(text, "enabled") {
+		t.Fatalf("ext list text output missing entry:\n%s", text)
+	}
+
+	o.Out.(*bytes.Buffer).Reset()
+	o.Err.(*bytes.Buffer).Reset()
+	o.Args = []string{"ext", "remove", "demo"}
+	if code := runWithOptions(o); code != 0 {
+		t.Fatalf("ext remove exit %d, stderr: %s", code, o.Err.(*bytes.Buffer).String())
+	}
+	if _, err := os.Stat(installedDir); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("extension still installed after remove: %v", err)
+	}
+
+	o.Err.(*bytes.Buffer).Reset()
+	o.Args = []string{"ext", "remove", "demo"}
+	if code := runWithOptions(o); code != 1 {
+		t.Fatalf("removing missing extension exit %d, want 1", code)
+	}
+}
+
+func TestBuildRuntimeLoadsProjectExtensionTool(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("extension tool fixture uses sh")
+	}
+	o := testRunOptions(t)
+	extDir := writeTestExtension(t,
+		filepath.Join(o.WorkDir, ".tern", "extensions", "demo"), "demo", true)
+
+	cfg, err := config.Load(config.LoadOptions{WorkDir: o.WorkDir, ConfigDir: os.Getenv("TERN_CONFIG_DIR")})
+	if err != nil {
+		t.Fatalf("config.Load: %v", err)
+	}
+
+	rt, err := BuildRuntime(RuntimeOptions{
+		Config:   cfg,
+		WorkDir:  o.WorkDir,
+		Provider: provider.NewMockProvider(),
+	})
+	if err != nil {
+		t.Fatalf("BuildRuntime: %v", err)
+	}
+	defer func() { _ = rt.Close() }()
+
+	if len(rt.Extensions) != 1 || rt.Extensions[0].Manifest.Name != "demo" {
+		t.Fatalf("extensions not loaded: %+v", rt.Extensions)
+	}
+	tool, ok := rt.Registry.Get("ext_demo_echo")
+	if !ok {
+		names := rt.Registry.Names()
+		t.Fatalf("extension tool not registered in %v", names)
+	}
+	if !tool.IsReadOnly() || !tool.IsParallelSafe() {
+		t.Fatalf("read_only extension tool flags: readonly=%v parallel=%v", tool.IsReadOnly(), tool.IsParallelSafe())
+	}
+	if !json.Valid(tool.Parameters()) {
+		t.Fatalf("invalid tool parameters: %s", tool.Parameters())
+	}
+	res, err := tool.Execute(t.Context(), tools.ExecEnv{WorkDir: o.WorkDir}, json.RawMessage(`{"hello":"world"}`))
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if !res.External {
+		t.Fatalf("result not marked external: %+v", res)
+	}
+	if !strings.Contains(res.Output, `"hello"`) {
+		t.Fatalf("unexpected tool output: %q", res.Output)
+	}
+	if strings.TrimSpace(rt.Extensions[0].Dir) != strings.TrimSpace(extDir) {
+		t.Fatalf("extension dir = %q, want %q", rt.Extensions[0].Dir, extDir)
+	}
 }

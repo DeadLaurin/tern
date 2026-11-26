@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -68,6 +69,7 @@ type Runtime struct {
 	Todos        *tools.TodoStore
 	Hooks        *ext.Runner
 	MCP          *ext.Manager
+	Extensions   []*ext.Extension
 	Subagents    *subagent.Manager
 	Agent        *agent.Agent
 
@@ -168,12 +170,21 @@ func BuildRuntime(opts RuntimeOptions) (*Runtime, error) {
 	// Hooks and MCP servers are optional extensions. Broken extension files
 	// are reported as warnings rather than preventing the session from
 	// starting.
+	extensions, extWarnings := ext.DiscoverExtensions(workDir, configDir)
+	rt.Warnings = append(rt.Warnings, extWarnings...)
+	rt.Extensions = extensions
+	extSet := ext.NewExtensionSet(extensions)
+
 	hookConfigs, hookWarnings := loadHookConfigs(configDir, workDir)
 	rt.Warnings = append(rt.Warnings, hookWarnings...)
+	// Extension hooks run after hooks.toml hooks for each event.
+	hookConfigs = append(hookConfigs, extSet.Hooks()...)
 	rt.Hooks = ext.NewRunner(hookConfigs...)
 
 	mcpConfigs, mcpWarnings := loadMCPConfigs(configDir, workDir)
 	rt.Warnings = append(rt.Warnings, mcpWarnings...)
+	// Extension MCP servers are appended after mcp.toml servers.
+	mcpConfigs = append(mcpConfigs, extSet.MCPServers()...)
 	rt.MCP = ext.NewManager(mcpConfigs...)
 
 	// Tool registry: built-ins plus web tools, MCP tools and the task tool.
@@ -191,6 +202,12 @@ func BuildRuntime(opts RuntimeOptions) (*Runtime, error) {
 	rt.Registry.Register(tools.NewAskUserTool())
 
 	rt.Registry.Register(agent.NewWebFetchTool(web.FetchOptions{}))
+
+	// Extension tools are namespaced (ext_*) and always report untrusted
+	// output.
+	for _, tool := range extSet.Tools() {
+		rt.Registry.Register(&extensionToolAdapter{tool: tool})
+	}
 
 	searcher, searchErr := web.NewSearcher(cfg.SearchBackend, cfg.SearchEndpoint, "", nil)
 	if searchErr != nil {
@@ -289,6 +306,58 @@ func BuildRuntime(opts RuntimeOptions) (*Runtime, error) {
 	})
 
 	return rt, nil
+}
+
+// ---------------------------------------------------------------------------
+// Extension tools
+// ---------------------------------------------------------------------------
+
+// extensionToolAdapter exposes an ext.ExtensionTool as a tools.Tool.
+//
+// Output is truncated exactly once, using the execution environment's budget,
+// and always marked untrusted (External).
+type extensionToolAdapter struct {
+	tool ext.ExtensionTool
+}
+
+func (t *extensionToolAdapter) Name() string { return t.tool.Name }
+
+func (t *extensionToolAdapter) Description() string {
+	if desc := strings.TrimSpace(t.tool.Description); desc != "" {
+		return desc
+	}
+	return "Extension tool " + t.tool.Name
+}
+
+func (t *extensionToolAdapter) Parameters() json.RawMessage {
+	if len(t.tool.Parameters) > 0 && json.Valid(t.tool.Parameters) {
+		return t.tool.Parameters
+	}
+	return json.RawMessage(ext.DefaultToolParameters)
+}
+
+func (t *extensionToolAdapter) IsReadOnly() bool     { return t.tool.ReadOnly }
+func (t *extensionToolAdapter) IsWeb() bool          { return false }
+func (t *extensionToolAdapter) IsParallelSafe() bool { return t.tool.ReadOnly }
+
+// Execute implements tools.Tool.
+func (t *extensionToolAdapter) Execute(ctx context.Context, env tools.ExecEnv, raw json.RawMessage) (tools.Result, error) {
+	workDir := env.WorkDir
+	if strings.TrimSpace(workDir) == "" {
+		workDir = env.WorkingDir()
+	}
+	out, err := t.tool.Execute(ctx, workDir, raw)
+	if err != nil {
+		return tools.Result{External: true}, err
+	}
+	return tools.Result{
+		Output:   env.Truncate(out),
+		External: true,
+		Metadata: map[string]any{
+			"extension_tool": t.tool.Name,
+			"extension_dir":  t.tool.ExtDir,
+		},
+	}, nil
 }
 
 func openSession(store *session.Store, workDir, model, resume string, continueLatest bool) (*session.Session, error) {
