@@ -10,6 +10,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"flag"
 	"fmt"
 	"io"
 	"net/http"
@@ -25,6 +26,9 @@ const defaultUpdateRepo = "DeadLaurin/tern"
 var (
 	githubAPIBase      = "https://api.github.com"
 	githubDownloadBase = "https://github.com"
+	// executablePath is a variable so commands can be tested without touching
+	// the real tern binary.
+	executablePath = os.Executable
 )
 
 type updateOptions struct {
@@ -36,9 +40,46 @@ type updateOptions struct {
 	APIBase        string
 	DownloadBase   string
 	TargetPath     string
+	Force          bool
 }
 
-func runUpdateCommand(out, errOut io.Writer) int {
+func printUpdateUsage(w io.Writer) {
+	fmt.Fprintln(w, `tern update - update tern to the latest release
+
+Usage:
+  tern update [--check] [--force]
+
+Flags:
+      --check    report whether an update is available without installing it
+      --force    reinstall the latest release even if already up to date
+  -h, --help     show this help`)
+}
+
+func runUpdateCommand(args []string, out, errOut io.Writer) int {
+	fs := flag.NewFlagSet("tern update", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	var checkOnly, force, help bool
+	fs.BoolVar(&checkOnly, "check", false, "report whether an update is available without installing it")
+	fs.BoolVar(&force, "force", false, "reinstall the latest release even if already up to date")
+	fs.BoolVar(&help, "help", false, "show help")
+	fs.BoolVar(&help, "h", false, "show help")
+	if err := fs.Parse(args); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			printUpdateUsage(out)
+			return 0
+		}
+		fmt.Fprintf(errOut, "tern update: %v\n", err)
+		return 2
+	}
+	if help {
+		printUpdateUsage(out)
+		return 0
+	}
+	if rest := fs.Args(); len(rest) > 0 {
+		fmt.Fprintf(errOut, "tern update: unexpected argument %q\n", rest[0])
+		return 2
+	}
+
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 
@@ -46,26 +87,43 @@ func runUpdateCommand(out, errOut io.Writer) int {
 	if repo == "" {
 		repo = defaultUpdateRepo
 	}
-	fmt.Fprintf(out, "Checking for tern updates from %s...\n", repo)
-	tag, updated, err := performUpdate(ctx, updateOptions{
+	opts := updateOptions{
 		Repo:           repo,
 		CurrentVersion: version,
 		GOOS:           runtime.GOOS,
 		GOARCH:         runtime.GOARCH,
-	})
+		Force:          force,
+	}
+
+	if checkOnly {
+		tag, available, err := checkForUpdate(ctx, opts)
+		if err != nil {
+			fmt.Fprintf(errOut, "tern update: %v\n", err)
+			return 1
+		}
+		if available {
+			fmt.Fprintf(out, "Update available: %s (current %s)\n", tag, version)
+		} else {
+			fmt.Fprintf(out, "tern is already up to date (%s)\n", tag)
+		}
+		return 0
+	}
+
+	fmt.Fprintf(out, "Checking for tern updates from %s...\n", repo)
+	tag, updated, err := performUpdate(ctx, opts)
 	if err != nil {
 		fmt.Fprintf(errOut, "tern update: %v\n", err)
 		return 1
 	}
 	if !updated {
-		fmt.Fprintf(out, "tern is already up to date (%s).\n", tag)
+		fmt.Fprintf(out, "tern is already up to date (%s)\n", tag)
 		return 0
 	}
 	fmt.Fprintf(out, "Updated tern to %s.\n", tag)
 	return 0
 }
 
-func performUpdate(ctx context.Context, opts updateOptions) (string, bool, error) {
+func applyUpdateDefaults(opts *updateOptions) {
 	if opts.Repo == "" {
 		opts.Repo = defaultUpdateRepo
 	}
@@ -84,12 +142,27 @@ func performUpdate(ctx context.Context, opts updateOptions) (string, bool, error
 	if opts.DownloadBase == "" {
 		opts.DownloadBase = githubDownloadBase
 	}
+}
+
+// checkForUpdate reports the latest release tag and whether it differs from
+// the current version without downloading or replacing anything.
+func checkForUpdate(ctx context.Context, opts updateOptions) (string, bool, error) {
+	applyUpdateDefaults(&opts)
+	tag, err := latestTag(ctx, opts.Client, opts.APIBase, opts.Repo)
+	if err != nil {
+		return "", false, err
+	}
+	return tag, normalizeVersion(tag) != normalizeVersion(opts.CurrentVersion), nil
+}
+
+func performUpdate(ctx context.Context, opts updateOptions) (string, bool, error) {
+	applyUpdateDefaults(&opts)
 
 	tag, err := latestTag(ctx, opts.Client, opts.APIBase, opts.Repo)
 	if err != nil {
 		return "", false, err
 	}
-	if normalizeVersion(tag) == normalizeVersion(opts.CurrentVersion) {
+	if normalizeVersion(tag) == normalizeVersion(opts.CurrentVersion) && !opts.Force {
 		return tag, false, nil
 	}
 
@@ -293,17 +366,18 @@ func archiveMode(mode os.FileMode) os.FileMode {
 }
 
 // replaceExecutable atomically replaces target (or the running executable)
-// with data.
+// with data. Symlinks are resolved first so updating a symlinked install keeps
+// the symlink intact and replaces the real binary it points to.
 func replaceExecutable(target string, data []byte, mode os.FileMode) error {
 	if strings.TrimSpace(target) == "" {
-		exe, err := os.Executable()
+		exe, err := executablePath()
 		if err != nil {
 			return fmt.Errorf("locate current executable: %w", err)
 		}
-		if resolved, err := filepath.EvalSymlinks(exe); err == nil {
-			exe = resolved
-		}
 		target = exe
+	}
+	if resolved, err := filepath.EvalSymlinks(target); err == nil {
+		target = resolved
 	}
 	if mode == 0 {
 		mode = 0o755

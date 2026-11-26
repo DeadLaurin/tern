@@ -96,7 +96,9 @@ func runWithOptions(o runOptions) int {
 		case "stats":
 			return runStatsCommand(o.Args[1:], o)
 		case "update":
-			return runUpdateCommand(o.Out, o.Err)
+			return runUpdateCommand(o.Args[1:], o.Out, o.Err)
+		case "uninstall":
+			return runUninstallCommand(o.Args[1:], o)
 		}
 	}
 
@@ -305,7 +307,8 @@ Usage:
   tern [flags]
   tern config
   tern stats [--json]
-  tern update
+  tern update [--check] [--force]
+  tern uninstall [--yes] [--purge] [--dry-run]
   tern version
 
 Flags:

@@ -8,6 +8,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -543,4 +544,236 @@ func testReleaseArchive(t *testing.T) (string, []byte) {
 		t.Fatal(err)
 	}
 	return updateAssetName("1.2.3", runtime.GOOS, runtime.GOARCH), buf.Bytes()
+}
+
+func TestUpdateCheckAgainstMockRelease(t *testing.T) {
+	asset, archive := testReleaseArchive(t)
+	sum := sha256.Sum256(archive)
+	checksums := fmt.Sprintf("%s  %s\n", hex.EncodeToString(sum[:]), asset)
+
+	var downloads int
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/repos/o/r/releases/latest", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.WriteString(w, `{"tag_name":"v1.2.3"}`)
+	})
+	mux.HandleFunc("/dl/o/r/releases/download/v1.2.3/"+asset, func(w http.ResponseWriter, r *http.Request) {
+		downloads++
+		_, _ = w.Write(archive)
+	})
+	mux.HandleFunc("/dl/o/r/releases/download/v1.2.3/checksums.txt", func(w http.ResponseWriter, r *http.Request) {
+		downloads++
+		_, _ = io.WriteString(w, checksums)
+	})
+	server := httptest.NewServer(mux)
+	defer server.Close()
+	t.Setenv("TERN_UPDATE_REPO", "o/r")
+
+	oldAPI, oldDownload := githubAPIBase, githubDownloadBase
+	githubAPIBase = server.URL + "/api"
+	githubDownloadBase = server.URL + "/dl"
+	t.Cleanup(func() { githubAPIBase, githubDownloadBase = oldAPI, oldDownload })
+
+	oldVersion := version
+	t.Cleanup(func() { version = oldVersion })
+
+	version = "dev"
+	o := testRunOptions(t)
+	o.Args = []string{"update", "--check"}
+	if code := runWithOptions(o); code != 0 {
+		t.Fatalf("update --check exit %d, stderr: %s", code, o.Err.(*bytes.Buffer).String())
+	}
+	if out := o.Out.(*bytes.Buffer).String(); !strings.Contains(out, "Update available: v1.2.3") {
+		t.Fatalf("update --check output missing availability: %s", out)
+	}
+
+	version = "v1.2.3"
+	upToDate := testRunOptions(t)
+	upToDate.Args = []string{"update", "--check"}
+	if code := runWithOptions(upToDate); code != 0 {
+		t.Fatalf("update --check (latest) exit %d, stderr: %s", code, upToDate.Err.(*bytes.Buffer).String())
+	}
+	if out := upToDate.Out.(*bytes.Buffer).String(); !strings.Contains(out, "tern is already up to date (v1.2.3)") {
+		t.Fatalf("update --check (latest) output = %s", out)
+	}
+	if downloads != 0 {
+		t.Fatalf("update --check downloaded %d files, want 0", downloads)
+	}
+}
+
+func TestUpdateThroughSymlink(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("symlink update behavior is covered on Unix")
+	}
+	asset, archive := testReleaseArchive(t)
+	sum := sha256.Sum256(archive)
+	checksums := fmt.Sprintf("%s  %s\n", hex.EncodeToString(sum[:]), asset)
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/repos/o/r/releases/latest", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.WriteString(w, `{"tag_name":"v1.2.3"}`)
+	})
+	mux.HandleFunc("/dl/o/r/releases/download/v1.2.3/"+asset, func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write(archive)
+	})
+	mux.HandleFunc("/dl/o/r/releases/download/v1.2.3/checksums.txt", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.WriteString(w, checksums)
+	})
+	server := httptest.NewServer(mux)
+	defer server.Close()
+	t.Setenv("TERN_UPDATE_REPO", "o/r")
+
+	oldAPI, oldDownload := githubAPIBase, githubDownloadBase
+	githubAPIBase = server.URL + "/api"
+	githubDownloadBase = server.URL + "/dl"
+	t.Cleanup(func() { githubAPIBase, githubDownloadBase = oldAPI, oldDownload })
+
+	oldVersion := version
+	version = "dev"
+	t.Cleanup(func() { version = oldVersion })
+
+	dir := t.TempDir()
+	target := filepath.Join(dir, "tern-real")
+	if err := os.WriteFile(target, []byte("old"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(dir, "tern")
+	if err := os.Symlink(target, link); err != nil {
+		t.Fatal(err)
+	}
+
+	oldExecutable := executablePath
+	executablePath = func() (string, error) { return link, nil }
+	t.Cleanup(func() { executablePath = oldExecutable })
+
+	o := testRunOptions(t)
+	o.Args = []string{"update"}
+	if code := runWithOptions(o); code != 0 {
+		t.Fatalf("update exit %d, stderr: %s", code, o.Err.(*bytes.Buffer).String())
+	}
+	if out := o.Out.(*bytes.Buffer).String(); !strings.Contains(out, "Updated tern to v1.2.3") {
+		t.Fatalf("update output = %s", out)
+	}
+
+	info, err := os.Lstat(link)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode()&os.ModeSymlink == 0 {
+		t.Fatalf("symlink was replaced by a regular file: %s", link)
+	}
+	resolved, err := filepath.EvalSymlinks(link)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resolvedTarget, err := filepath.EvalSymlinks(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resolved != resolvedTarget {
+		t.Fatalf("symlink now points to %s, want %s", resolved, resolvedTarget)
+	}
+	got, err := os.ReadFile(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != "new-binary" {
+		t.Fatalf("target binary = %q, want new-binary", got)
+	}
+}
+
+func TestUninstallDryRunYesAndPurge(t *testing.T) {
+	setup := func(t *testing.T) (runOptions, string, string, string) {
+		t.Helper()
+		o := testRunOptions(t)
+		configDir := os.Getenv("TERN_CONFIG_DIR")
+		dataDir := os.Getenv("TERN_DATA_DIR")
+		if err := os.MkdirAll(configDir, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.MkdirAll(dataDir, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(configDir, "config.toml"), []byte("model = \"test\"\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dataDir, "session.json"), []byte("{}\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		binary := filepath.Join(t.TempDir(), "tern")
+		if err := os.WriteFile(binary, []byte("fake-binary"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		oldExecutable := executablePath
+		executablePath = func() (string, error) { return binary, nil }
+		t.Cleanup(func() { executablePath = oldExecutable })
+		return o, binary, configDir, dataDir
+	}
+
+	t.Run("dry run", func(t *testing.T) {
+		o, binary, configDir, dataDir := setup(t)
+		o.Args = []string{"uninstall", "--dry-run", "--purge"}
+		if code := runWithOptions(o); code != 0 {
+			t.Fatalf("uninstall --dry-run exit %d, stderr: %s", code, o.Err.(*bytes.Buffer).String())
+		}
+		out := o.Out.(*bytes.Buffer).String()
+		for _, want := range []string{binary, configDir, dataDir, "Dry run: no changes were made."} {
+			if !strings.Contains(out, want) {
+				t.Fatalf("dry-run output missing %q:\n%s", want, out)
+			}
+		}
+		for _, path := range []string{binary, filepath.Join(configDir, "config.toml"), filepath.Join(dataDir, "session.json")} {
+			if _, err := os.Stat(path); err != nil {
+				t.Fatalf("dry run removed %s: %v", path, err)
+			}
+		}
+	})
+
+	t.Run("yes keeps config", func(t *testing.T) {
+		o, binary, configDir, dataDir := setup(t)
+		o.Args = []string{"uninstall", "--yes"}
+		if code := runWithOptions(o); code != 0 {
+			t.Fatalf("uninstall --yes exit %d, stderr: %s", code, o.Err.(*bytes.Buffer).String())
+		}
+		if _, err := os.Stat(binary); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("binary still exists: %v", err)
+		}
+		if _, err := os.Stat(filepath.Join(configDir, "config.toml")); err != nil {
+			t.Fatalf("config was removed without --purge: %v", err)
+		}
+		if _, err := os.Stat(filepath.Join(dataDir, "session.json")); err != nil {
+			t.Fatalf("sessions were removed without --purge: %v", err)
+		}
+		out := o.Out.(*bytes.Buffer).String()
+		if !strings.Contains(out, "Config and sessions were kept") || !strings.Contains(out, configDir) || !strings.Contains(out, dataDir) {
+			t.Fatalf("missing kept-data note:\n%s", out)
+		}
+	})
+
+	t.Run("yes purge", func(t *testing.T) {
+		o, binary, configDir, dataDir := setup(t)
+		o.Args = []string{"uninstall", "--yes", "--purge"}
+		if code := runWithOptions(o); code != 0 {
+			t.Fatalf("uninstall --yes --purge exit %d, stderr: %s", code, o.Err.(*bytes.Buffer).String())
+		}
+		for _, path := range []string{binary, configDir, dataDir} {
+			if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
+				t.Fatalf("%s still exists: %v", path, err)
+			}
+		}
+	})
+
+	t.Run("non-tty requires yes", func(t *testing.T) {
+		o, binary, _, _ := setup(t)
+		o.Args = []string{"uninstall"}
+		o.StdinTTY = false
+		if code := runWithOptions(o); code != 1 {
+			t.Fatalf("uninstall without --yes exit %d, want 1", code)
+		}
+		if !strings.Contains(o.Err.(*bytes.Buffer).String(), "--yes") {
+			t.Fatalf("stderr should advise --yes: %s", o.Err.(*bytes.Buffer).String())
+		}
+		if _, err := os.Stat(binary); err != nil {
+			t.Fatalf("binary was removed without confirmation: %v", err)
+		}
+	})
 }
