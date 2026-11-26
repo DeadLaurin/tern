@@ -329,6 +329,7 @@ func (m *Model) applyReasoningEffort(effort string) {
 	m.dirty = true
 }
 func (m *Model) modelModalView() string {
+	m.modalRows = nil
 	var b strings.Builder
 	current := ""
 	if m.opts.Config != nil {
@@ -345,6 +346,7 @@ func (m *Model) modelModalView() string {
 		b.WriteString(m.st.paint(m.st.dim, fmt.Sprintf("  … %d above\n", start)))
 	}
 	for i := start; i < end; i++ {
+		m.addModalRow(strings.Count(b.String(), "\n"), i)
 		model := m.modal.models[i]
 		marker := "  "
 		style := m.st.dim
@@ -837,6 +839,7 @@ func (item modalSession) displayName() string {
 }
 
 func (m *Model) sessionsModalView() string {
+	m.modalRows = nil
 	var b strings.Builder
 	items := m.filteredSessions()
 	filter := m.modal.filter
@@ -862,6 +865,7 @@ func (m *Model) sessionsModalView() string {
 			b.WriteString(m.st.paint(m.st.dim, fmt.Sprintf("  … %d above\n", start)))
 		}
 		for i := start; i < end; i++ {
+			m.addModalRow(strings.Count(b.String(), "\n"), i)
 			item := items[i]
 			marker := "  "
 			style := m.st.dim
@@ -982,6 +986,7 @@ func (m *Model) resumeStatsSession() {
 }
 
 func (m *Model) statsModalView() string {
+	m.modalRows = nil
 	if m.modal.stats == nil {
 		return m.modalFrame("Usage & activity", "No stats available.", "esc close")
 	}
@@ -1060,6 +1065,7 @@ func (m *Model) statsModalView() string {
 			activeID = m.opts.Session.ID()
 		}
 		for i := start; i < end; i++ {
+			m.addModalRow(strings.Count(b.String(), "\n"), i)
 			row := s.Sessions[i]
 			marker := "  "
 			style := m.st.dim
@@ -1276,6 +1282,7 @@ func (m *Model) createExampleSkill() {
 }
 
 func (m *Model) skillsModalView() string {
+	m.modalRows = nil
 	var b strings.Builder
 	if len(m.modal.skills) == 0 {
 		b.WriteString(m.st.paint(m.st.dim, "No skills found."))
@@ -1287,6 +1294,7 @@ func (m *Model) skillsModalView() string {
 			b.WriteString(m.st.paint(m.st.dim, fmt.Sprintf("  … %d above\n", start)))
 		}
 		for i := start; i < end; i++ {
+			m.addModalRow(strings.Count(b.String(), "\n"), i)
 			skill := m.modal.skills[i]
 			marker := "  "
 			style := m.st.dim
@@ -1407,6 +1415,7 @@ func (m *Model) reconnectMCP() {
 }
 
 func (m *Model) mcpModalView() string {
+	m.modalRows = nil
 	m.refreshMCPStatus()
 	var b strings.Builder
 	if len(m.modal.mcp) == 0 {
@@ -1432,6 +1441,7 @@ func (m *Model) mcpModalView() string {
 		limit := maxInt(4, minInt(len(m.modal.mcp), m.modalRowLimit()/2))
 		start, end := windowRange(len(m.modal.mcp), m.modal.index, limit)
 		for i := start; i < end; i++ {
+			m.addModalRow(strings.Count(b.String(), "\n"), i)
 			server := m.modal.mcp[i]
 			marker := "  "
 			style := m.st.dim
@@ -1588,6 +1598,7 @@ func (m *Model) clampHelpIndex() {
 }
 
 func (m *Model) helpModalView() string {
+	m.modalRows = nil
 	if len(m.modal.helpItems) == 0 {
 		return m.modalFrame("Help", "No commands available.", "esc close")
 	}
@@ -1607,6 +1618,7 @@ func (m *Model) helpModalView() string {
 	}
 	width := maxInt(30, m.modalTextWidth())
 	for i := start; i < end; i++ {
+		m.addModalRow(strings.Count(b.String(), "\n"), i)
 		item := m.modal.helpItems[i]
 		marker := "  "
 		style := m.st.dim

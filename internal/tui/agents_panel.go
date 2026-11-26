@@ -69,6 +69,7 @@ func livePreview(s string, width, maxLines int) string {
 
 // agentsPanelView renders the interactive /agents panel.
 func (m *Model) agentsPanelView() string {
+	m.agentsPanelRows = make(map[int]int)
 	title := "Sub-agents"
 	var b strings.Builder
 	b.WriteString(m.st.paint(m.st.heading, title))
@@ -84,6 +85,7 @@ func (m *Model) agentsPanelView() string {
 		if block == nil {
 			continue
 		}
+		m.agentsPanelRows[strings.Count(b.String(), "\n")] = i
 		view := block.view
 		marker := "  "
 		style := m.st.dim
@@ -423,11 +425,34 @@ func (m *Model) approvalView() string {
 		}
 	}
 
+	allowLabel := "[y] Allow"
+	allowAllLabel := "[a] Allow all this turn"
+	denyLabel := "[n] Deny"
 	b.WriteString("\n")
-	b.WriteString(m.st.paint(m.st.success, "[y] Allow") + m.st.paint(m.st.dim, "  ") +
-		m.st.paint(m.st.accent, "[a] Allow all this turn") + m.st.paint(m.st.dim, "  ") +
-		m.st.paint(m.st.error, "[n] Deny"))
-	return m.overlayCard(b.String())
+	b.WriteString(m.st.paint(m.st.success, allowLabel) + m.st.paint(m.st.dim, "  ") +
+		m.st.paint(m.st.accent, allowAllLabel) + m.st.paint(m.st.dim, "  ") +
+		m.st.paint(m.st.error, denyLabel))
+
+	content := b.String()
+	buttonLine := strings.Count(content, "\n")
+	allowStart := 0
+	allowEnd := displayWidth(allowLabel)
+	allowAllStart := allowEnd + 2
+	allowAllEnd := allowAllStart + displayWidth(allowAllLabel)
+	denyStart := allowAllEnd + 2
+	denyEnd := denyStart + displayWidth(denyLabel)
+	card := m.overlayCard(content)
+	insetY, insetX := 0, 0
+	if !m.st.plain {
+		insetY = 1 // top border
+		insetX = 2 // border + horizontal padding
+	}
+	m.overlayHits = []overlayHit{
+		{line: insetY + buttonLine, start: insetX + allowStart, end: insetX + allowEnd, action: actionApprovalAllow},
+		{line: insetY + buttonLine, start: insetX + allowAllStart, end: insetX + allowAllEnd, action: actionApprovalAllowAll},
+		{line: insetY + buttonLine, start: insetX + denyStart, end: insetX + denyEnd, action: actionApprovalDeny},
+	}
+	return card
 }
 
 func (m *Model) askView() string {
@@ -441,9 +466,13 @@ func (m *Model) askView() string {
 	b.WriteString("\n\n")
 	b.WriteString(wrapPlainCell(state.question, maxInt(20, m.width-2)))
 	b.WriteString("\n")
+	optionLines := make([]int, 0, len(state.options))
+	optionWidths := make([]int, 0, len(state.options))
 	if len(state.options) > 0 {
 		b.WriteString("\n")
 		for i, option := range state.options {
+			optionLines = append(optionLines, strings.Count(b.String(), "\n"))
+			optionWidths = append(optionWidths, displayWidth(option))
 			marker := "  "
 			style := m.st.dim
 			if i == state.selected {
@@ -465,7 +494,24 @@ func (m *Model) askView() string {
 	if len(state.options) > 0 {
 		b.WriteString(m.st.paint(m.st.dim, "  ·  ↑/↓ choose or type a free-form answer"))
 	}
-	return m.overlayCard(b.String())
+	card := m.overlayCard(b.String())
+	insetY, insetX := 0, 0
+	if !m.st.plain {
+		insetY = 1
+		insetX = 2
+	}
+	m.overlayHits = m.overlayHits[:0]
+	for i, line := range optionLines {
+		width := 2 + optionWidths[i]
+		m.overlayHits = append(m.overlayHits, overlayHit{
+			line:   insetY + line,
+			start:  insetX,
+			end:    insetX + width,
+			action: actionAskOption,
+			index:  i,
+		})
+	}
+	return card
 }
 
 // overlayCard wraps modal prompt content in the same crisp framed card used by

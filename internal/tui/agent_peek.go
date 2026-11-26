@@ -345,6 +345,7 @@ func peekMessageText(msg provider.Message) string {
 }
 
 func (m *Model) agentPeekView() string {
+	m.modalRows = nil
 	if block := m.agents[m.modal.peekAgentID]; block != nil {
 		view := block.view
 		agentType := emptyFallback(view.AgentType, "agent")

@@ -211,6 +211,27 @@ type Model struct {
 	// modal carries the selected rows, filters and transient prompts.
 	activeModal modalKind
 	modal       modalState
+
+	// clipboardFn is the clipboard writer. It defaults to copyToClipboard and
+	// is injectable so tests stay hermetic.
+	clipboardFn func(string) error
+
+	// Mouse geometry recorded by the last paint. Views are shallow strings, so
+	// each view records where its clickable rows landed before returning.
+	entrySpans         []entrySpan
+	sidebarAgentRows   map[int]string
+	sidebarX           int
+	viewportX          int
+	statusHits         []statusHit
+	statusX            int
+	statusY            int
+	modalRows          []modalRowHit
+	modalAbsRows       map[int]int
+	overlayHits        []overlayHit
+	overlayTop         int
+	overlayLeft        int
+	agentsPanelRows    map[int]int
+	agentsPanelAbsRows map[int]int
 }
 
 // Init starts the UI ticker.
@@ -317,6 +338,18 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.viewport.ScrollDown(3)
 			m.followTail = m.viewport.AtBottom()
 			return m, nil
+		}
+		if msg.Action == tea.MouseActionPress {
+			switch msg.Button {
+			case tea.MouseButtonLeft:
+				if m.handleLeftClick(msg) {
+					return m, nil
+				}
+			case tea.MouseButtonRight:
+				if m.activeModal == modalNone && !m.agentsPanel && m.handleTranscriptMouse(msg) {
+					return m, nil
+				}
+			}
 		}
 		var cmd tea.Cmd
 		m.viewport, cmd = m.viewport.Update(msg)
@@ -1167,10 +1200,14 @@ func (m *Model) View() string {
 	// Blocking prompts are true modal overlays: a card in the middle of the
 	// terminal, never a transcript replacement that drifts with layout changes.
 	if m.pendingApproval != nil {
-		return m.finishView(lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, m.approvalView()))
+		view := m.approvalView()
+		m.positionOverlay(view)
+		return m.finishView(lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, view))
 	}
 	if m.pendingAsk != nil {
-		return m.finishView(lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, m.askView()))
+		view := m.askView()
+		m.positionOverlay(view)
+		return m.finishView(lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, view))
 	}
 
 	colW := m.contentWidth()
@@ -1186,6 +1223,11 @@ func (m *Model) View() string {
 		mainView = m.modalView()
 	}
 	if mainView != "" {
+		if m.agentsPanel {
+			m.positionAgentsPanel(mainView)
+		} else {
+			m.positionModal(mainView)
+		}
 		return m.finishView(lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, mainView))
 	}
 
@@ -1219,10 +1261,13 @@ func (m *Model) View() string {
 	}
 	m.viewport.Width = colW
 	m.viewport.Height = height
+	m.viewportX = m.contentLeftPad()
 	if m.followTail {
 		m.viewport.GotoBottom()
 	}
 	transcript := m.layoutBlock(m.viewport.View())
+	m.statusX = m.contentLeftPad()
+	m.statusY = m.height - 1
 	bottom = append(bottom, m.layoutBlock(m.statusView()))
 	return m.finishView(strings.Join(append([]string{transcript}, bottom...), "\n"))
 }
@@ -1251,6 +1296,7 @@ func (m *Model) twoPaneView() string {
 	}
 	m.viewport.Width = innerW
 	m.viewport.Height = height
+	m.viewportX = 1
 	if m.followTail {
 		m.viewport.GotoBottom()
 	}
@@ -1261,6 +1307,9 @@ func (m *Model) twoPaneView() string {
 	}
 	leftPane := m.padPane(left, leftW, innerW, m.height)
 	divider := m.dividerView(m.height)
+	m.statusX = 1
+	m.statusY = m.height - 1
+	m.sidebarX = leftW + 3
 	rightPane := m.sidebarView(m.sidebarWidth(), m.height)
 	return lipgloss.JoinHorizontal(lipgloss.Top, leftPane, divider, rightPane)
 }
@@ -1421,15 +1470,21 @@ func (m *Model) computeContextTokens() {
 }
 
 func (m *Model) renderTranscript() string {
+	m.entrySpans = m.entrySpans[:0]
 	if len(m.entries) == 0 {
 		return m.renderWelcome()
 	}
 	var blocks []string
+	line := 0
 	for _, entry := range m.entries {
 		rendered := m.renderEntry(entry)
-		if strings.TrimSpace(rendered) != "" {
-			blocks = append(blocks, rendered)
+		if strings.TrimSpace(rendered) == "" {
+			continue
 		}
+		lines := lineCount(rendered)
+		m.entrySpans = append(m.entrySpans, entrySpan{entry: entry, start: line, end: line + lines})
+		blocks = append(blocks, rendered)
+		line += lines + 2 // renderTranscript joins blocks with a blank line
 	}
 	return strings.Join(blocks, "\n\n")
 }
@@ -1653,21 +1708,40 @@ func (m *Model) statusView() string {
 	if mode == string(permission.ModeYolo) {
 		modeLabel = yoloLabel
 	}
-	parts := []string{modelLabel, modeLabel}
+	type statusPart struct {
+		text   string
+		action mouseAction
+	}
+	parts := []statusPart{{text: modelLabel, action: actionStatusModel}, {text: modeLabel, action: actionStatusYolo}}
 	if branch := strings.TrimSpace(m.opts.GitBranch); branch != "" {
-		parts = append(parts, branch)
+		parts = append(parts, statusPart{text: branch})
 	}
 	if speed := m.speed(); speed > 0 {
-		parts = append(parts, formatTokensPerSec(speed))
+		parts = append(parts, statusPart{text: formatTokensPerSec(speed)})
 	}
 	if mode != string(permission.ModeYolo) {
-		parts = append(parts, "^Y yolo")
+		parts = append(parts, statusPart{text: "^Y yolo", action: actionStatusYolo})
 	}
-	parts = append(parts, "^B panel")
+	parts = append(parts, statusPart{text: "^B panel", action: actionStatusPanel})
 	if !m.followTail && !m.viewport.AtBottom() {
-		parts = append(parts, "↓ scrolled up")
+		parts = append(parts, statusPart{text: "↓ scrolled up", action: actionStatusBottom})
 	}
-	text := m.st.statusSegments(parts...)
+	texts := make([]string, len(parts))
+	m.statusHits = m.statusHits[:0]
+	sep := 3 // both " · " and " | " occupy three columns
+	x := 0
+	for i, part := range parts {
+		if i > 0 {
+			x += sep
+		}
+		width := displayWidth(part.text)
+		if part.action != actionNone {
+			m.statusHits = append(m.statusHits, statusHit{start: x, end: x + width, action: part.action})
+		}
+		x += width
+		texts[i] = part.text
+	}
+	text := m.st.statusSegments(texts...)
 	width := m.contentWidth()
 	if m.st.plain {
 		return text

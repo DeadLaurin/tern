@@ -1963,3 +1963,250 @@ func TestPersistentChatbarHistory(t *testing.T) {
 		t.Fatalf("final down = %q, want the empty draft", got)
 	}
 }
+
+func clickAt(m *Model, x, y int, button tea.MouseButton) tea.Cmd {
+	_, cmd := m.Update(tea.MouseMsg{Action: tea.MouseActionPress, Button: button, X: x, Y: y})
+	return cmd
+}
+
+func statusHitFor(m *Model, action mouseAction) (statusHit, bool) {
+	for _, hit := range m.statusHits {
+		if hit.action == action {
+			return hit, true
+		}
+	}
+	return statusHit{}, false
+}
+
+func TestMouseClickSubagentSidebarOpensPeek(t *testing.T) {
+	m := newTestModel(t, Options{})
+	m.width = 140
+	m.height = 40
+	for _, event := range []subagent.Event{
+		{Type: subagent.EventSubagentStart, AgentID: "agent-1", AgentType: subagent.AgentExplore, Description: "find the parser", Status: subagent.StatusRunning},
+		{Type: subagent.EventSubagentStart, AgentID: "agent-2", AgentType: subagent.AgentReview, Description: "review the patch", Status: subagent.StatusRunning},
+	} {
+		m.Update(subagentEventMsg{event: event})
+	}
+	m.Update(tickMsg(time.Now()))
+	m.View()
+
+	row := -1
+	for y, id := range m.sidebarAgentRows {
+		if id == "agent-2" {
+			row = y
+			break
+		}
+	}
+	if row < 0 {
+		t.Fatalf("no sidebar hit row for agent-2: %+v", m.sidebarAgentRows)
+	}
+	clickAt(m, m.sidebarX+3, row, tea.MouseButtonLeft)
+	if m.activeModal != modalAgentPeek {
+		t.Fatalf("left click opened %v, want modalAgentPeek", m.activeModal)
+	}
+	if m.modal.peekAgentID != "agent-2" {
+		t.Fatalf("peeked agent = %q, want agent-2", m.modal.peekAgentID)
+	}
+	if !strings.Contains(m.View(), "review the patch") {
+		t.Fatalf("peek view missing clicked agent:\n%s", m.View())
+	}
+}
+
+func TestRightClickMessageCopiesToClipboard(t *testing.T) {
+	m := newTestModel(t, Options{})
+	var copied string
+	m.clipboardFn = func(text string) error {
+		copied = text
+		return nil
+	}
+	user := &transcriptEntry{kind: entryUser, text: "copy this user prompt"}
+	assistant := &transcriptEntry{kind: entryAssistant, text: "copy this assistant reply"}
+	m.entries = append(m.entries, user, assistant)
+	m.dirty = true
+	m.View()
+
+	var span entrySpan
+	found := false
+	for _, candidate := range m.entrySpans {
+		if candidate.entry == user {
+			span = candidate
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatal("user entry span was not recorded")
+	}
+	y := span.start - m.viewport.YOffset
+	clickAt(m, m.viewportX+2, y, tea.MouseButtonRight)
+	if copied != user.text {
+		t.Fatalf("clipboard got %q, want %q", copied, user.text)
+	}
+	if !strings.HasPrefix(m.statusMsg, "Copied") || !strings.Contains(m.statusMsg, "chars") {
+		t.Fatalf("statusMsg = %q, want a Copied confirmation", m.statusMsg)
+	}
+
+	// Assistant messages copy too.
+	copied = ""
+	m.View()
+	y = -1
+	for _, candidate := range m.entrySpans {
+		if candidate.entry == assistant {
+			y = candidate.start - m.viewport.YOffset
+			break
+		}
+	}
+	if y < 0 {
+		t.Fatal("assistant entry span was not recorded")
+	}
+	clickAt(m, m.viewportX+2, y, tea.MouseButtonRight)
+	if copied != assistant.text {
+		t.Fatalf("clipboard got %q, want %q", copied, assistant.text)
+	}
+}
+
+func TestLeftClickThinkingEntryToggles(t *testing.T) {
+	m := newTestModel(t, Options{})
+	thinking := &transcriptEntry{kind: entryReasoning, text: "weighing the options carefully"}
+	m.entries = append(m.entries, thinking)
+	m.thinking = thinkingCollapsed
+	m.dirty = true
+	m.View()
+
+	row := -1
+	for _, span := range m.entrySpans {
+		if span.entry == thinking {
+			row = span.start - m.viewport.YOffset
+			break
+		}
+	}
+	if row < 0 {
+		t.Fatal("reasoning entry span was not recorded")
+	}
+	clickAt(m, m.viewportX+1, row, tea.MouseButtonLeft)
+	if m.thinking != thinkingExpanded {
+		t.Fatalf("click did not expand thinking: mode=%v", m.thinking)
+	}
+	m.View()
+	row = -1
+	for _, span := range m.entrySpans {
+		if span.entry == thinking {
+			row = span.start - m.viewport.YOffset
+			break
+		}
+	}
+	if row < 0 {
+		t.Fatal("expanded reasoning entry span was not recorded")
+	}
+	clickAt(m, m.viewportX+1, row, tea.MouseButtonLeft)
+	if m.thinking != thinkingCollapsed {
+		t.Fatalf("second click did not collapse thinking: mode=%v", m.thinking)
+	}
+}
+
+func TestLeftClickStatusSegments(t *testing.T) {
+	m := newTestModel(t, Options{GitBranch: "main"})
+	m.width = 120
+	m.height = 32
+
+	t.Run("model", func(t *testing.T) {
+		m.View()
+		hit, ok := statusHitFor(m, actionStatusModel)
+		if !ok {
+			t.Fatal("model status hit was not recorded")
+		}
+		clickAt(m, m.statusX+hit.start, m.statusY, tea.MouseButtonLeft)
+		if m.activeModal != modalModel {
+			t.Fatalf("model click opened %v, want modalModel", m.activeModal)
+		}
+		m.closeModal()
+	})
+
+	t.Run("yolo", func(t *testing.T) {
+		m.View()
+		hit, ok := statusHitFor(m, actionStatusYolo)
+		if !ok {
+			t.Fatal("yolo status hit was not recorded")
+		}
+		clickAt(m, m.statusX+hit.start, m.statusY, tea.MouseButtonLeft)
+		if m.opts.Agent.Permissions.Mode() != permission.ModeYolo {
+			t.Fatalf("yolo click left mode = %v", m.opts.Agent.Permissions.Mode())
+		}
+	})
+
+	t.Run("panel", func(t *testing.T) {
+		m.sidebarHidden = false
+		m.View()
+		hit, ok := statusHitFor(m, actionStatusPanel)
+		if !ok {
+			t.Fatal("panel status hit was not recorded")
+		}
+		clickAt(m, m.statusX+hit.start, m.statusY, tea.MouseButtonLeft)
+		if !m.sidebarHidden {
+			t.Fatal("panel click did not hide the sidebar")
+		}
+	})
+}
+
+func TestLeftClickApprovalButtonsAndHelpRow(t *testing.T) {
+	t.Run("approval allow and deny", func(t *testing.T) {
+		for _, action := range []mouseAction{actionApprovalAllow, actionApprovalDeny} {
+			m := newTestModel(t, Options{})
+			response := make(chan approvalResult, 1)
+			m.Update(approvalRequestMsg{request: &approvalState{
+				parent:   &agent.ApprovalRequest{ToolName: "bash", Command: "rm -rf build"},
+				response: response,
+			}})
+			m.View()
+			found := false
+			for _, hit := range m.overlayHits {
+				if hit.action != action {
+					continue
+				}
+				found = true
+				clickAt(m, m.overlayLeft+hit.start, m.overlayTop+hit.line, tea.MouseButtonLeft)
+				break
+			}
+			if !found {
+				t.Fatalf("approval hit %v was not recorded: %+v", action, m.overlayHits)
+			}
+			select {
+			case result := <-response:
+				wantAllow := action == actionApprovalAllow
+				if result.allow != wantAllow {
+					t.Fatalf("approval result allow=%v, want %v", result.allow, wantAllow)
+				}
+			case <-time.After(time.Second):
+				t.Fatal("approval click did not resolve the request")
+			}
+			if m.pendingApproval != nil {
+				t.Fatal("approval prompt was not cleared")
+			}
+		}
+	})
+
+	t.Run("help row", func(t *testing.T) {
+		m := newTestModel(t, Options{})
+		submitText(t, m, "/help")
+		m.View()
+		if len(m.modalAbsRows) == 0 {
+			t.Fatal("help modal did not record clickable rows")
+		}
+		target := 1
+		y := -1
+		for row, index := range m.modalAbsRows {
+			if index == target {
+				y = row
+				break
+			}
+		}
+		if y < 0 {
+			t.Fatalf("help row %d missing from hit map: %+v", target, m.modalAbsRows)
+		}
+		clickAt(m, m.width/2, y, tea.MouseButtonLeft)
+		if m.modal.index != target {
+			t.Fatalf("help click selected row %d, want %d", m.modal.index, target)
+		}
+	})
+}

@@ -115,6 +115,7 @@ func New(opts Options) *Model {
 		followTail:   true,
 		ctxWindow:    defaultContextWindow(opts),
 		sessionStart: time.Now(),
+		clipboardFn:  copyToClipboard,
 	}
 	if rawConfigDir != "" {
 		m.historyPath = filepath.Join(rawConfigDir, "history.jsonl")

@@ -94,6 +94,7 @@ func (m *Model) sidebarView(width, height int) string {
 	if width <= 0 || height <= 0 {
 		return ""
 	}
+	m.sidebarAgentRows = make(map[int]string)
 	lines := make([]string, 0, height)
 	add := func(block string) {
 		if block == "" {
@@ -108,7 +109,7 @@ func (m *Model) sidebarView(width, height int) string {
 	add("")
 
 	// 2. Sub-agents.
-	add(m.sidebarSubagents(width, height-len(lines)-6))
+	add(m.sidebarSubagents(width, height-len(lines)-6, len(lines)))
 
 	// 3. Tasks / todos.
 	if block := m.sidebarTodos(width); block != "" {
@@ -122,6 +123,13 @@ func (m *Model) sidebarView(width, height int) string {
 		add(block)
 	}
 
+	// Drop rows that the height clip removes so a click cannot hit an agent
+	// that is no longer visible.
+	for y := range m.sidebarAgentRows {
+		if y >= height {
+			delete(m.sidebarAgentRows, y)
+		}
+	}
 	return m.fitSidebar(lines, width, height)
 }
 
@@ -205,7 +213,7 @@ func (m *Model) sidebarGauge(label string, pct, barWidth int, suffix string) str
 	return truncateAnsi(line, m.sidebarWidth())
 }
 
-func (m *Model) sidebarSubagents(width, budget int) string {
+func (m *Model) sidebarSubagents(width, budget, startLine int) string {
 	total := len(m.agentOrder)
 	running := m.activeAgentCount()
 	title := "SUB-AGENTS"
@@ -235,6 +243,7 @@ func (m *Model) sidebarSubagents(width, budget int) string {
 		}
 		selected := m.agentsOpen && i == m.agentFocus
 		lines = append(lines, m.sidebarAgentRow(block.view, selected, width))
+		m.sidebarAgentRows[startLine+len(lines)-1] = block.view.ID
 		if selected {
 			m.flushAgentLine(block.view.ID)
 			if detail := m.sidebarAgentDetail(block.view, width); detail != "" {
