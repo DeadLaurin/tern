@@ -46,6 +46,16 @@ func BuildInitialContext(workDir string, now time.Time) string {
 		}
 	}
 
+	// A compact repository map is injected once, with the rest of the
+	// volatile environment block, so the system prompt (and its prefix
+	// cache) stays untouched.
+	if index, err := IndexRepo(dir, defaultMaxEntries); err == nil {
+		if formatted := index.Format(); formatted != "" {
+			b.WriteString(formatted)
+			b.WriteString("\n")
+		}
+	}
+
 	fmt.Fprintf(&b, "</%s>", contextTags)
 	return b.String()
 }
