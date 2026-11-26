@@ -1488,3 +1488,52 @@ func TestSteerConcurrentCallsAreSafe(t *testing.T) {
 		t.Fatalf("pending steers after clear = %d, want 0", got)
 	}
 }
+
+func TestContextTokensIncludesRetainedCompletionAndResetsOnSwitch(t *testing.T) {
+	mp := provider.NewMockProvider()
+	mp.QueueSSE(strings.Join([]string{
+		`data: {"choices":[{"index":0,"delta":{"reasoning_content":"thinking"}}]}`,
+		`data: {"choices":[{"index":0,"delta":{"content":"answer"}}]}`,
+		`data: {"choices":[{"index":0,"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":1000,"completion_tokens":300,"total_tokens":1300,"prompt_cache_hit_tokens":600,"prompt_cache_miss_tokens":400,"completion_tokens_details":{"reasoning_tokens":200}}}`,
+		`data: [DONE]`,
+		``,
+	}, "\n"))
+	a := New(Options{
+		Config:   config.Default(),
+		Provider: mp,
+		WorkDir:  t.TempDir(),
+	})
+
+	res, err := a.RunTurn(context.Background(), "hello", nil)
+	if err != nil {
+		t.Fatalf("RunTurn: %v", err)
+	}
+	// After turn end, reasoning_content (200 tokens) is stripped on the next
+	// request, so retained context is 1000 + (300 - 200) = 1100.
+	if res.ContextTokens != 1100 {
+		t.Fatalf("res.ContextTokens = %d, want 1100", res.ContextTokens)
+	}
+	if got := a.ContextTokens(); got != 1100 {
+		t.Fatalf("agent.ContextTokens() = %d, want 1100", got)
+	}
+
+	// Switching to a fresh session must reset context tracking.
+	a.SwitchSession(nil)
+	if a.lastPromptTokens != 0 {
+		t.Fatalf("lastPromptTokens after SwitchSession(nil) = %d, want 0", a.lastPromptTokens)
+	}
+}
+
+func TestAnswerTextTokensExcludesToolCallArgs(t *testing.T) {
+	u := provider.Usage{
+		PromptTokens:     1000,
+		CompletionTokens: 600,
+		ReasoningTokens:  100,
+	}
+	// Short preamble ("Let me check.") with a large tool call must not attribute
+	// all 500 non-reasoning completion tokens to the preamble text.
+	got := answerTextTokens(u, len("Let me check."), true)
+	if got > 10 {
+		t.Fatalf("answerTextTokens with tool calls = %d, want small preamble estimate", got)
+	}
+}

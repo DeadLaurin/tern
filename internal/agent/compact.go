@@ -196,7 +196,7 @@ func (a *Agent) compactInternal(ctx context.Context, instructions, reason string
 	a.lastPrefixHash = ""
 	a.lastSystemToolsHash = ""
 	a.lastReqMessages = nil
-	a.lastPromptTokens = 0
+	a.resetContextTracking()
 
 	cost := a.costForUsage(usage, time.Now())
 	if usage.TotalTokens > 0 || usage.PromptTokens > 0 || usage.CompletionTokens > 0 {

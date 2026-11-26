@@ -138,10 +138,14 @@ type Agent struct {
 	totalUsage provider.Usage
 	totalCost  float64
 
-	lastPrefixHash      string
-	lastSystemToolsHash string
-	lastReqMessages     []provider.Message
-	lastPromptTokens    int
+	lastPrefixHash       string
+	lastSystemToolsHash  string
+	lastReqMessages      []provider.Message
+	lastPromptTokens     int
+	lastCompletionTokens int
+	lastReasoningTokens  int
+	pendingContextChars  int
+	inTurn               bool
 }
 
 // New creates an agent and loads any existing session history.
@@ -290,6 +294,7 @@ func (a *Agent) SwitchSession(sess *session.Session) {
 	a.ensureInit()
 
 	a.clearSteersLocked()
+	a.resetContextTracking()
 	a.Session = sess
 	if sess == nil {
 		a.history = nil
@@ -415,6 +420,7 @@ func (a *Agent) RunTurn(ctx context.Context, userInput string, attachments []pro
 	}
 
 	res := &TurnResult{Turn: turn, StopReason: StopComplete}
+	a.inTurn = true
 	a.emit(Event{Type: EventTurnStart, Turn: turn, Message: "turn started"})
 
 	maxSteps := a.Config.MaxSteps
@@ -454,6 +460,9 @@ func (a *Agent) RunTurn(ctx context.Context, userInput string, attachments []pro
 		res.textTokens += sr.TextTokens
 		if sr.Usage.TotalTokens > 0 || sr.Usage.PromptTokens > 0 || sr.Usage.CompletionTokens > 0 {
 			a.lastPromptTokens = sr.Usage.PromptTokens
+			a.lastCompletionTokens = sr.Usage.CompletionTokens
+			a.lastReasoningTokens = sr.Usage.ReasoningTokens
+			a.pendingContextChars = 0
 		}
 
 		assistant := provider.Message{
@@ -511,6 +520,7 @@ func (a *Agent) RunTurn(ctx context.Context, userInput string, attachments []pro
 // finishTurn records the stop reason and emits turn_end (and an error event
 // when err is non-nil).
 func (a *Agent) finishTurn(res *TurnResult, turn int, startUsage provider.Usage, startCost float64, reason StopReason, err error) (*TurnResult, error) {
+	a.inTurn = false
 	res.StopReason = reason
 	res.Usage = usageDiff(a.totalUsage, startUsage)
 	res.CostUSD = a.totalCost - startCost
@@ -594,13 +604,13 @@ func answerTextTokens(u provider.Usage, textChars int, hasToolCalls bool) int {
 	if textChars <= 0 {
 		return 0
 	}
-	if u.CompletionTokens > 0 && u.ReasoningTokens > 0 && u.CompletionTokens > u.ReasoningTokens {
+	if !hasToolCalls && u.CompletionTokens > 0 && u.ReasoningTokens > 0 && u.CompletionTokens > u.ReasoningTokens {
 		return u.CompletionTokens - u.ReasoningTokens
 	}
-	if u.ReasoningTokens == 0 && u.CompletionTokens > 0 && !hasToolCalls {
+	if !hasToolCalls && u.ReasoningTokens == 0 && u.CompletionTokens > 0 {
 		return u.CompletionTokens
 	}
-	tokens := textChars / 4
+	tokens := (textChars + 3) / 4
 	if tokens < 1 {
 		tokens = 1
 	}
@@ -782,6 +792,9 @@ func (a *Agent) recordUsage(req provider.ChatRequest, u provider.Usage, turn, st
 	cost := a.costForUsage(u, time.Now())
 	a.addUsage(u, cost)
 	a.lastPromptTokens = u.PromptTokens
+	a.lastCompletionTokens = u.CompletionTokens
+	a.lastReasoningTokens = u.ReasoningTokens
+	a.pendingContextChars = 0
 
 	prefix, _ := provider.PrefixHash(req)
 	if a.Session != nil {
@@ -1083,6 +1096,9 @@ func (a *Agent) appendSkippedToolResults(turn, step int, calls []provider.ToolCa
 // appendMessage appends to the in-memory history and persists it.
 func (a *Agent) appendMessage(msg provider.Message, external bool) error {
 	a.history = append(a.history, msg)
+	if a.lastPromptTokens > 0 && (msg.Role == provider.RoleUser || msg.Role == provider.RoleTool) {
+		a.pendingContextChars += messageChars(msg)
+	}
 	if a.Session != nil {
 		if err := a.Session.AppendMessageExternal(msg, external); err != nil {
 			return fmt.Errorf("agent: persist message: %w", err)
@@ -1203,9 +1219,20 @@ func usageDiff(total, start provider.Usage) provider.Usage {
 func cacheHitRate(u provider.Usage) float64 {
 	total := u.PromptCacheHitTokens + u.PromptCacheMissTokens
 	if total <= 0 {
+		total = u.PromptTokens
+	}
+	if total <= 0 {
 		return 0
 	}
 	return float64(u.PromptCacheHitTokens) / float64(total)
+}
+
+func (a *Agent) resetContextTracking() {
+	a.lastPromptTokens = 0
+	a.lastCompletionTokens = 0
+	a.lastReasoningTokens = 0
+	a.pendingContextChars = 0
+	a.inTurn = false
 }
 
 func (a *Agent) shouldAutoCompact() bool {
@@ -1221,7 +1248,7 @@ func (a *Agent) shouldAutoCompact() bool {
 	if window <= 0 {
 		window = provider.DefaultContextWindow
 	}
-	tokens := a.lastPromptTokens
+	tokens := a.ContextTokens()
 	if estimated := a.estimateTokens(); estimated > tokens {
 		tokens = estimated
 	}
@@ -1229,31 +1256,44 @@ func (a *Agent) shouldAutoCompact() bool {
 }
 
 // ContextTokens returns the parent agent's current single-request context size
-// in tokens (latest prompt size when known, otherwise estimated from parent
-// history). Sub-agent token usage is never included here because each sub-agent
-// has its own independent context window.
+// in tokens. When provider usage is known, it anchors on the last request's
+// exact prompt_tokens plus the retained completion tokens and any subsequent
+// user/tool message deltas. Sub-agent token usage is never included here
+// because each sub-agent has its own independent context window.
 func (a *Agent) ContextTokens() int {
 	if a.lastPromptTokens > 0 {
-		return a.lastPromptTokens
+		retained := a.lastCompletionTokens
+		if !a.inTurn && a.lastReasoningTokens > 0 {
+			retained -= a.lastReasoningTokens
+			if retained < 0 {
+				retained = 0
+			}
+		}
+		return a.lastPromptTokens + retained + a.pendingContextChars/4
 	}
 	return a.estimateTokens()
 }
 
 func (a *Agent) estimateTokens() int {
 	chars := len(a.systemPrompt())
-	for _, msg := range a.history {
-		chars += len(msg.Content) + len(msg.ReasoningContent)
-		for _, part := range msg.Parts {
-			chars += len(part.Text)
-		}
-		for _, tc := range msg.ToolCalls {
-			chars += len(tc.Function.Name) + len(tc.Function.Arguments)
-		}
+	for _, msg := range provider.PrepareMessagesForRequest(a.history) {
+		chars += messageChars(msg)
 	}
 	for _, def := range a.Registry.ToolDefs() {
 		chars += len(def.Name) + len(def.Description) + len(def.Parameters)
 	}
 	return chars / 4
+}
+
+func messageChars(msg provider.Message) int {
+	chars := len(msg.Content) + len(msg.ReasoningContent)
+	for _, part := range msg.Parts {
+		chars += len(part.Text)
+	}
+	for _, tc := range msg.ToolCalls {
+		chars += len(tc.Function.Name) + len(tc.Function.Arguments)
+	}
+	return chars
 }
 
 func truncateResult(s string, maxChars int) string {
