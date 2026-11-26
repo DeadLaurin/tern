@@ -19,11 +19,12 @@ import (
 )
 
 const (
-	helperEnv        = "TERN_EXT_HELPER"
-	helperModeHook   = "hook-echo"
-	helperModeBlock  = "hook-block"
-	helperModeSleep  = "hook-sleep"
-	helperModeMCPSvr = "mcp-stdio"
+	helperEnv         = "TERN_EXT_HELPER"
+	helperModeHook    = "hook-echo"
+	helperModeBlock   = "hook-block"
+	helperModeSleep   = "hook-sleep"
+	helperModeMCPSvr  = "mcp-stdio"
+	helperModeExtTool = "ext-tool"
 )
 
 // TestMain doubles as the entry point for helper subprocesses: hook scripts and
@@ -51,6 +52,8 @@ func runHelper() {
 		helperHookSleep()
 	case helperModeMCPSvr:
 		helperMCPStdio()
+	case helperModeExtTool:
+		helperExtTool()
 	default:
 		fmt.Fprintf(os.Stderr, "unknown helper mode %q\n", mode)
 		os.Exit(3)
