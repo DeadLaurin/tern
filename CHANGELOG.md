@@ -4,6 +4,12 @@ All notable changes to tern are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and tern adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v0.7.3] - 2026-11-27
+
+### Added
+- **Clickable `/sessions` with hover preview & clear-all in `tern serve`**: added `POST /api/sessions/resume`, `POST /api/sessions/new`, and `POST /api/sessions/clear`; clicking any session in the Web UI `/sessions` modal now opens it immediately, hovering/focusing displays a live preview snippet, and the footer includes `+ New session` and a two-click `Clear all` button.
+- **`/steps [n]` & live balance refresh in `tern serve`**: added `GET`/`POST /api/steps`, clear step-limit stop notifications on `max_steps`, and automatic balance refreshes after every completed turn and every 2 minutes while idle.
+
 ## [v0.7.2] - 2026-11-27
 
 ### Added
@@ -145,6 +151,7 @@ All notable changes to tern are documented here. The format is based on
 - `tern doctor` section headers render in order.
 - All `IsParallelSafe` tools, including task sub-agents, run concurrently.
 
+[v0.7.3]: https://github.com/DeadLaurin/tern/compare/v0.7.2...v0.7.3
 [v0.7.2]: https://github.com/DeadLaurin/tern/compare/v0.7.1...v0.7.2
 [v0.7.1]: https://github.com/DeadLaurin/tern/compare/v0.7.0...v0.7.1
 [v0.7.0]: https://github.com/DeadLaurin/tern/compare/v0.6.2...v0.7.0

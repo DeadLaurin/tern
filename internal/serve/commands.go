@@ -13,6 +13,7 @@ import (
 	terncontext "github.com/tern-agent/tern/internal/context"
 	"github.com/tern-agent/tern/internal/ext"
 	"github.com/tern-agent/tern/internal/provider"
+	"github.com/tern-agent/tern/internal/session"
 )
 
 type providerWire struct {
@@ -581,4 +582,140 @@ func (s *Server) handleSubagentCancel(w http.ResponseWriter, r *http.Request) {
 		cancelled = s.Subagents.CancelOne(strings.TrimSpace(req.ID))
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"cancelled": cancelled})
+}
+
+func (s *Server) handleResumeSession(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	if s.Store == nil {
+		writeError(w, http.StatusServiceUnavailable, "session store is not available")
+		return
+	}
+	s.mu.Lock()
+	running := s.running
+	s.mu.Unlock()
+	if running {
+		writeError(w, http.StatusConflict, "cannot switch sessions while a turn is running")
+		return
+	}
+	var req struct {
+		ID string `json:"id"`
+	}
+	if err := decodeJSON(r, &req); err != nil || strings.TrimSpace(req.ID) == "" {
+		writeError(w, http.StatusBadRequest, "id is required")
+		return
+	}
+	sess, err := s.Store.Open(strings.TrimSpace(req.ID))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	s.activateSession(sess)
+	writeJSON(w, http.StatusOK, s.status())
+}
+
+func (s *Server) handleNewSession(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	if s.Store == nil {
+		writeError(w, http.StatusServiceUnavailable, "session store is not available")
+		return
+	}
+	s.mu.Lock()
+	running := s.running
+	s.mu.Unlock()
+	if running {
+		writeError(w, http.StatusConflict, "cannot start a new session while a turn is running")
+		return
+	}
+	meta := session.SessionMeta{WorkDir: s.WorkDir}
+	if s.Config != nil {
+		meta.Model = s.Config.Model
+	}
+	sess, err := s.Store.Create(meta)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	s.activateSession(sess)
+	writeJSON(w, http.StatusOK, s.status())
+}
+
+func (s *Server) handleClearSessions(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	if s.Store == nil {
+		writeError(w, http.StatusServiceUnavailable, "session store is not available")
+		return
+	}
+	curID := ""
+	if s.Session != nil {
+		curID = s.Session.ID()
+	}
+	list, err := s.Store.List("")
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	deleted := 0
+	for _, item := range list {
+		if item.ID == curID {
+			continue
+		}
+		if err := s.Store.Delete(item.ID); err == nil {
+			deleted++
+		}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"deleted": deleted})
+}
+
+func (s *Server) activateSession(sess *session.Session) {
+	s.mu.Lock()
+	s.Session = sess
+	if s.Agent != nil {
+		s.Agent.SwitchSession(sess)
+		s.usage, s.totalCost = s.Agent.TotalUsage()
+		s.contextTokens = s.Agent.ContextTokens()
+	} else {
+		s.usage, s.totalCost = sess.TotalUsage()
+		s.contextTokens = 0
+	}
+	s.cacheHit = cacheHitRate(s.usage)
+	s.mu.Unlock()
+}
+
+func (s *Server) handleSteps(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case http.MethodGet:
+		steps := config.DefaultMaxSteps
+		if s.Config != nil && s.Config.MaxSteps > 0 {
+			steps = s.Config.MaxSteps
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"max_steps": steps})
+	case http.MethodPost:
+		var req struct {
+			MaxSteps int `json:"max_steps"`
+		}
+		if err := decodeJSON(r, &req); err != nil || req.MaxSteps <= 0 || req.MaxSteps > 10000 {
+			writeError(w, http.StatusBadRequest, "max_steps must be between 1 and 10000")
+			return
+		}
+		s.mu.Lock()
+		if s.Config != nil {
+			s.Config.MaxSteps = req.MaxSteps
+		}
+		if s.Agent != nil && s.Agent.Config != nil {
+			s.Agent.Config.MaxSteps = req.MaxSteps
+		}
+		s.mu.Unlock()
+		writeJSON(w, http.StatusOK, map[string]any{"max_steps": req.MaxSteps})
+	default:
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+	}
 }

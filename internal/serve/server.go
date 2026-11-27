@@ -258,7 +258,11 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/skills", s.handleSkills)
 	mux.HandleFunc("/api/plugins", s.handlePlugins)
 	mux.HandleFunc("/api/sessions", s.handleSessions)
+	mux.HandleFunc("/api/sessions/resume", s.handleResumeSession)
+	mux.HandleFunc("/api/sessions/new", s.handleNewSession)
+	mux.HandleFunc("/api/sessions/clear", s.handleClearSessions)
 	mux.HandleFunc("/api/sessions/rename", s.handleRenameSession)
+	mux.HandleFunc("/api/steps", s.handleSteps)
 	mux.HandleFunc("/api/subagents/transcript", s.handleSubagentTranscript)
 	mux.HandleFunc("/api/subagents/cancel", s.handleSubagentCancel)
 	mux.HandleFunc("/api/undo", s.handleUndo)
@@ -320,6 +324,7 @@ type statusResponse struct {
 	PendingApproval *approvalWire          `json:"pending_approval,omitempty"`
 	PendingAsk      *askWire               `json:"pending_ask,omitempty"`
 	SessionAllowAll bool                   `json:"session_allow_all,omitempty"`
+	MaxSteps        int                    `json:"max_steps,omitempty"`
 	Subagents       []subagent.AgentStatus `json:"subagents,omitempty"`
 	Todos           []tools.TodoItem       `json:"todos,omitempty"`
 	AuthEnabled     bool                   `json:"auth_enabled"`
@@ -364,6 +369,9 @@ func (s *Server) status() statusResponse {
 		resp.PendingAsk = &ask
 	}
 	resp.SessionAllowAll = s.sessionAllowAll
+	if s.Config != nil {
+		resp.MaxSteps = s.Config.MaxSteps
+	}
 	model := s.model
 	s.mu.Unlock()
 

@@ -989,6 +989,7 @@
     { name: "skills",    desc: "Browse discovered skills" },
     { name: "stats",     desc: "Usage, cache & cost summary" },
     { name: "steer",     desc: "Steer active turn mid-flight" },
+    { name: "steps",     desc: "View or set max tool steps per turn" },
     { name: "theme",     desc: "Switch color theme (dark / light)" },
     { name: "thinking",  desc: "Toggle thinking visibility or effort" },
     { name: "tools",     desc: "Toggle tool display (compact/hidden)" },
@@ -1159,6 +1160,11 @@
       showApp();
       refreshStatus();
       refreshBalance(false);
+      if (!state.balanceTimer) {
+        state.balanceTimer = setInterval(function () {
+          if (!state.running) { refreshBalance(false); }
+        }, 120000);
+      }
       loadHistory();
       connectEvents();
     }).catch(function () {
@@ -1868,8 +1874,13 @@
         if (finalText && (!state.turn || !state.turn.raw)) {
           addAssistantText(null, finalText, false);
         }
+        if (ev.stop_reason === "max_steps") {
+          var lim = (state.status && state.status.max_steps) || 250;
+          addInfo("⚠ Stopped: reached step limit (" + lim + "). Type \"continue\" to keep going, or run /steps <n> to raise the limit.");
+        }
         setRunning(false);
         refreshStatus();
+        refreshBalance(false);
         scrollBottom(true);
         break;
       case "error":
@@ -2279,6 +2290,79 @@
     });
   }
 
+  function openSessionsModal() {
+    openModal("Sessions", '<div class="sb-dim">Loading sessions…</div>', "");
+    api("/api/sessions").then(function (r) {
+      var list = r.sessions || [];
+      var body = '<div class="modal-list" id="sessList"></div>' +
+        '<div id="sessPreview" class="sa-thought" style="margin-top:4px;min-height:38px;"><span class="sb-dim">Hover a session to preview · click to open</span></div>';
+      var foot = '<div style="display:flex;gap:8px;align-items:center;">' +
+        '<button class="cli-btn ok" id="sessNewBtn" type="button">+ New session</button>' +
+        '<button class="cli-btn no" id="sessClearBtn" type="button">Clear all</button>' +
+        '</div><span>' + list.length + ' session(s)</span>';
+      openModal("Sessions", body, foot);
+      var box = document.getElementById("sessList");
+      var preview = document.getElementById("sessPreview");
+
+      function showPreview(s) {
+        if (!preview || !s) { return; }
+        var meta = (s.model || "") + (s.message_count ? (" · " + s.message_count + " msgs") : "") + (s.cost_usd ? (" · $" + s.cost_usd.toFixed(3)) : "");
+        preview.innerHTML = '<div class="sa-thought-head">' + escapeHTML(s.name || s.id) + (meta ? (" · " + escapeHTML(meta)) : "") + '</div>' +
+          escapeHTML(s.preview || "(empty session)");
+      }
+
+      if (!list.length) {
+        box.innerHTML = '<div class="sb-dim">No saved sessions yet.</div>';
+      } else {
+        list.slice(0, 60).forEach(function (s) {
+          var row = document.createElement("button");
+          row.type = "button";
+          row.className = "modal-row" + (s.id === r.current ? " active" : "");
+          row.innerHTML = '<span class="modal-row-main"><span class="modal-row-name">' + escapeHTML(s.name || s.id) + '</span>' +
+            (s.id === r.current ? '<span class="badge badge-saved">current</span>' : '') + '</span>' +
+            '<span class="modal-row-meta">' + escapeHTML((s.message_count || 0) + " msgs" + (s.cost_usd ? (" · $" + s.cost_usd.toFixed(3)) : "")) + '</span>';
+          row.addEventListener("mouseenter", function () { showPreview(s); });
+          row.addEventListener("focus", function () { showPreview(s); });
+          row.addEventListener("click", function () {
+            if (s.id === r.current) { closeModal(); return; }
+            api("/api/sessions/resume", { method: "POST", body: { id: s.id } }).then(function (st) {
+              closeModal();
+              applyStatus(st);
+              loadHistory();
+              addInfo("Resumed session: " + (s.name || s.id));
+            }).catch(function (err) { addError(err.message); });
+          });
+          box.appendChild(row);
+        });
+        showPreview(list[0]);
+      }
+
+      document.getElementById("sessNewBtn").addEventListener("click", function () {
+        api("/api/sessions/new", { method: "POST" }).then(function (st) {
+          closeModal();
+          applyStatus(st);
+          loadHistory();
+          addInfo("Started new session.");
+        }).catch(function (err) { addError(err.message); });
+      });
+      var clearArmed = false;
+      var clearBtn = document.getElementById("sessClearBtn");
+      clearBtn.addEventListener("click", function () {
+        if (!clearArmed) {
+          clearArmed = true;
+          clearBtn.textContent = "Confirm clear?";
+          return;
+        }
+        api("/api/sessions/clear", { method: "POST" }).then(function (res) {
+          addInfo("Cleared " + (res.deleted || 0) + " inactive session(s).");
+          openSessionsModal();
+        }).catch(function (err) { addError(err.message); });
+      });
+    }).catch(function (err) {
+      openModal("Sessions", '<div class="modal-err">' + escapeHTML(err.message) + '</div>', "");
+    });
+  }
+
   function openChangelogModal() {
     openModal("What's New", '<div class="sb-dim">Loading changelog…</div>', "");
     api("/api/changelog").then(function (data) {
@@ -2398,22 +2482,22 @@
         }).catch(function (err) { openModal("Plugins", '<div class="modal-err">' + escapeHTML(err.message) + '</div>', ""); });
         return true;
       case "sessions":
-        openModal("Sessions", '<div class="sb-dim">Loading sessions…</div>', "");
-        api("/api/sessions").then(function (r) {
-          var list = r.sessions || [];
-          if (!list.length) { openModal("Sessions", '<div class="sb-dim">No saved sessions yet.</div>', ""); return; }
-          var body = '<div class="modal-list" id="sessList"></div>';
-          openModal("Sessions (" + list.length + ")", body, "Current: " + (r.current || "none"));
-          var box = document.getElementById("sessList");
-          list.slice(0, 50).forEach(function (s) {
-            var row = document.createElement("div");
-            row.className = "modal-row" + (s.id === r.current ? " active" : "");
-            row.innerHTML = '<span class="modal-row-main"><span class="modal-row-name">' + escapeHTML(s.name || s.id) + '</span>' +
-              (s.id === r.current ? '<span class="badge badge-saved">current</span>' : '') + '</span>' +
-              '<span class="modal-row-meta">' + escapeHTML((s.model || "") + (s.cost_usd ? (" · $" + s.cost_usd.toFixed(3)) : "")) + '</span>';
-            box.appendChild(row);
-          });
-        }).catch(function (err) { openModal("Sessions", '<div class="modal-err">' + escapeHTML(err.message) + '</div>', ""); });
+        openSessionsModal();
+        return true;
+      case "steps":
+      case "max-steps":
+        if (!arg) {
+          api("/api/steps").then(function (r) {
+            addInfo("Current max steps per turn: " + r.max_steps + " (usage: /steps <number>, e.g. /steps 500)");
+          }).catch(function (err) { addError(err.message); });
+        } else {
+          var n = parseInt(arg, 10);
+          if (!n || n < 1 || n > 10000) { addError("Usage: /steps <1..10000>"); return true; }
+          api("/api/steps", { method: "POST", body: { max_steps: n } }).then(function (r) {
+            if (state.status) { state.status.max_steps = r.max_steps; }
+            addInfo("Max steps per turn set to " + r.max_steps + ".");
+          }).catch(function (err) { addError(err.message); });
+        }
         return true;
       case "name":
         if (!arg) { addError("Usage: /name <session title>"); return true; }
