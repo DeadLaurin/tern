@@ -2054,7 +2054,10 @@
 
   function renderSlashMenu() {
     el.slashMenu.innerHTML = "";
-    state.slashMatches.slice(0, 6).forEach(function (item, i) {
+    el.slashMenu.style.maxHeight = "220px";
+    el.slashMenu.style.overflowY = "auto";
+    var activeRow = null;
+    state.slashMatches.forEach(function (item, i) {
       var row = document.createElement("div");
       row.className = "slash-row" + (i === state.slashIndex ? " active" : "");
       row.innerHTML =
@@ -2068,8 +2071,12 @@
         send();
       });
       el.slashMenu.appendChild(row);
+      if (i === state.slashIndex) { activeRow = row; }
     });
     el.slashMenu.classList.remove("hidden");
+    if (activeRow && activeRow.scrollIntoView) {
+      activeRow.scrollIntoView({ block: "nearest" });
+    }
   }
 
   /* ---------------- modals (Provider -> Model wizard & Changelog) ---------------- */

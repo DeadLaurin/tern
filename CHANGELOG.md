@@ -4,6 +4,11 @@ All notable changes to tern are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and tern adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v0.7.4] - 2026-11-27
+
+### Fixed
+- **Scrollable `/` command menu in `tern serve`**: the Web UI slash-command autocomplete menu now renders all matching commands in a scrollable list and smoothly scrolls along with `↑`/`↓` arrow navigation (just like the TUI).
+
 ## [v0.7.3] - 2026-11-27
 
 ### Added
@@ -151,6 +156,7 @@ All notable changes to tern are documented here. The format is based on
 - `tern doctor` section headers render in order.
 - All `IsParallelSafe` tools, including task sub-agents, run concurrently.
 
+[v0.7.4]: https://github.com/DeadLaurin/tern/compare/v0.7.3...v0.7.4
 [v0.7.3]: https://github.com/DeadLaurin/tern/compare/v0.7.2...v0.7.3
 [v0.7.2]: https://github.com/DeadLaurin/tern/compare/v0.7.1...v0.7.2
 [v0.7.1]: https://github.com/DeadLaurin/tern/compare/v0.7.0...v0.7.1
