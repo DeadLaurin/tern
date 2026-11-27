@@ -50,6 +50,7 @@ var builtinCommandNames = []string{
 	"skills",
 	"stats",
 	"steer",
+	"steps",
 	"theme",
 	"thinking",
 	"tools",
@@ -87,6 +88,7 @@ var builtinCommandDescriptions = map[string]string{
 	"skills":   "Browse & load skills",
 	"stats":    "Usage & cache dashboard",
 	"steer":    "Steer active turn mid-flight",
+	"steps":    "View or set max tool steps per turn",
 	"theme":    "Switch color theme",
 	"thinking": "Set reasoning effort or visibility",
 	"tools":    "Toggle tool display (compact/expanded/hidden)",
@@ -130,6 +132,9 @@ func (m *Model) handleSlash(line string, attachments []provider.ContentPart) tea
 
 	case "steer":
 		return m.cmdSteer(args)
+
+	case "steps", "max-steps", "maxsteps":
+		return m.cmdSteps(args)
 
 	case "queue":
 		return m.cmdQueue(args)
@@ -363,6 +368,31 @@ func (m *Model) cmdSteer(args string) tea.Cmd {
 		return nil
 	}
 	return m.startTurn(text, nil)
+}
+
+func (m *Model) cmdSteps(args string) tea.Cmd {
+	trimmed := strings.TrimSpace(args)
+	if trimmed == "" {
+		cur := config.DefaultMaxSteps
+		if m.opts.Config != nil && m.opts.Config.MaxSteps > 0 {
+			cur = m.opts.Config.MaxSteps
+		}
+		m.addInfo(fmt.Sprintf("Current max steps per turn: %d (usage: /steps <number>, e.g. /steps 500)", cur))
+		return nil
+	}
+	n, err := strconv.Atoi(trimmed)
+	if err != nil || n <= 0 || n > 10000 {
+		m.addError("Usage: /steps <1..10000>")
+		return nil
+	}
+	if m.opts.Config != nil {
+		m.opts.Config.MaxSteps = n
+	}
+	if m.opts.Agent != nil && m.opts.Agent.Config != nil {
+		m.opts.Agent.Config.MaxSteps = n
+	}
+	m.addInfo(fmt.Sprintf("Max steps per turn set to %d.", n))
+	return nil
 }
 
 // cmdQueue inspects and manages prompts waiting behind the active turn.

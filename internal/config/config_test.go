@@ -80,7 +80,7 @@ func TestDefaultConfig(t *testing.T) {
 		{"reasoning_effort", cfg.ReasoningEffort, "high"},
 		{"permission_mode", cfg.PermissionMode, "ask"},
 		{"web_permission", cfg.WebPermission, "ask"},
-		{"max_steps", cfg.MaxSteps, 50},
+		{"max_steps", cfg.MaxSteps, 250},
 		{"max_cost_usd", cfg.MaxCostUSD, 0.0},
 		{"max_agents", cfg.MaxAgents, 4},
 		{"max_agent_depth", cfg.MaxAgentDepth, 1},
@@ -163,7 +163,7 @@ func TestLoadPrecedence(t *testing.T) {
 		{
 			name:         "built-in defaults",
 			wantModel:    "deepseek-flash",
-			wantMaxSteps: 50,
+			wantMaxSteps: 250,
 		},
 		{
 			name:         "global over defaults",

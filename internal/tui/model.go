@@ -16,6 +16,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 
 	"github.com/tern-agent/tern/internal/agent"
+	"github.com/tern-agent/tern/internal/config"
 	terncontext "github.com/tern-agent/tern/internal/context"
 	"github.com/tern-agent/tern/internal/permission"
 	"github.com/tern-agent/tern/internal/provider"
@@ -236,9 +237,10 @@ type Model struct {
 	slashDismissed string
 
 	// Non-blocking release update status populated by Init or /version.
-	updateAvailable string
-	updateChecked   bool
-	balance         *provider.BalanceInfo
+	updateAvailable  string
+	updateChecked    bool
+	balance          *provider.BalanceInfo
+	lastBalanceFetch time.Time
 
 	// historyPath is the persisted terminal-style chatbar history. It stays
 	// empty when no config dir was supplied so tests and embedded use never
@@ -360,6 +362,7 @@ func (m *Model) fetchBalanceCmd(announce bool) tea.Cmd {
 		}
 		return nil
 	}
+	m.lastBalanceFetch = time.Now()
 	baseCtx := m.baseCtx
 	if baseCtx == nil {
 		baseCtx = context.Background()
@@ -456,7 +459,13 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.running || m.activeAgentCount() > 0 {
 			m.dirty = true
 		}
-		return m, tea.Tick(tickInterval, func(t time.Time) tea.Msg { return tickMsg(t) })
+		nextTick := tea.Tick(tickInterval, func(t time.Time) tea.Msg { return tickMsg(t) })
+		if !m.needsSetup && !m.running && !m.lastBalanceFetch.IsZero() && time.Since(m.lastBalanceFetch) >= 2*time.Minute {
+			if balCmd := m.fetchBalanceCmd(false); balCmd != nil {
+				return m, tea.Batch(nextTick, balCmd)
+			}
+		}
+		return m, nextTick
 
 	case agentEventMsg:
 		m.handleAgentEvent(msg.event)
@@ -468,6 +477,9 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case turnDoneMsg:
 		m.handleTurnDone(msg)
+		if !m.running && !m.needsSetup {
+			return m, m.fetchBalanceCmd(false)
+		}
 		return m, nil
 
 	case cmdResultMsg:
@@ -1107,6 +1119,40 @@ func (m *Model) startTurn(text string, attachments []provider.ContentPart) tea.C
 	return nil
 }
 
+// cycleQuickModel switches immediately to the next configured DeepSeek model
+// when clicking the model name in the top-right inspector, or opens the model
+// picker when using a multi-model provider such as OpenRouter.
+func (m *Model) cycleQuickModel() {
+	cfg := m.opts.Config
+	if cfg == nil {
+		return
+	}
+	prov := strings.ToLower(strings.TrimSpace(cfg.Provider))
+	if prov != "" && prov != "deepseek" {
+		m.openModelModal()
+		return
+	}
+	names := make([]string, 0, len(cfg.Pricing))
+	for name := range cfg.Pricing {
+		names = append(names, name)
+	}
+	if len(names) < 2 {
+		m.openModelModal()
+		return
+	}
+	sort.Strings(names)
+	cur := strings.TrimSpace(cfg.Model)
+	next := names[0]
+	for i, name := range names {
+		if name == cur {
+			next = names[(i+1)%len(names)]
+			break
+		}
+	}
+	m.applyModel(next)
+	m.statusMsg = "Model switched to " + next
+}
+
 func (m *Model) handleTurnDone(msg turnDoneMsg) {
 	m.flushPending()
 	m.running = false
@@ -1138,7 +1184,11 @@ func (m *Model) handleTurnDone(msg turnDoneMsg) {
 	} else if msg.result != nil {
 		switch msg.result.StopReason {
 		case agent.StopMaxSteps:
-			m.addInfo("Stopped: maximum steps reached.")
+			limit := config.DefaultMaxSteps
+			if m.opts.Config != nil && m.opts.Config.MaxSteps > 0 {
+				limit = m.opts.Config.MaxSteps
+			}
+			m.addInfo(fmt.Sprintf("Stopped: reached step limit (%d). Type \"continue\" to keep going, or run /steps <n> to raise the limit.", limit))
 		case agent.StopBudget:
 			m.addInfo("Stopped: cost budget reached.")
 		case agent.StopCancelled:

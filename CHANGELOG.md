@@ -4,6 +4,17 @@ All notable changes to tern are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and tern adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v0.7.1] - 2026-11-27
+
+### Added
+- **`/steps [n]` command**: view or change `max_steps` per turn live in the TUI (alias `/max-steps`).
+- **Clickable top-right model switcher in TUI**: clicking the model name under `CONTEXT & STATS` in the right sidebar cycles DeepSeek models immediately (`deepseek-flash` ↔ `deepseek-v4-pro`) or opens `/model` on multi-model providers.
+- **Automatic balance refresh**: TUI balance now refreshes automatically after every completed turn and every 2 minutes while idle.
+
+### Changed
+- Raised `DefaultMaxSteps` from `50` to `250` in non-YOLO modes and updated the step-limit stop notice to clearly report the limit and how to continue or raise it.
+- Replaced horizontal scrolling in the TUI textbar with word-aware soft-wrapping so long prompts and linebreaks behave naturally.
+
 ## [v0.7.0] - 2026-11-27
 
 ### Added
@@ -128,6 +139,7 @@ All notable changes to tern are documented here. The format is based on
 - `tern doctor` section headers render in order.
 - All `IsParallelSafe` tools, including task sub-agents, run concurrently.
 
+[v0.7.1]: https://github.com/DeadLaurin/tern/compare/v0.7.0...v0.7.1
 [v0.7.0]: https://github.com/DeadLaurin/tern/compare/v0.6.2...v0.7.0
 [v0.6.2]: https://github.com/DeadLaurin/tern/compare/v0.6.1...v0.6.2
 [v0.6.1]: https://github.com/DeadLaurin/tern/compare/v0.6.0...v0.6.1

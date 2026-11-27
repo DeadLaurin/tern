@@ -2523,10 +2523,10 @@ func TestLiveSlashAutocompleteAndGhostCompletion(t *testing.T) {
 		t.Fatal("expected inline ghost completion when typing '/'")
 	}
 
-	// Filtering to "/st" narrows to stats & steer and updates ghost text.
+	// Filtering to "/st" narrows to stats, steer & steps and updates ghost text.
 	typeText(t, m, "st")
-	if len(m.slashMenu) != 2 || m.slashMenu[0].name != "stats" || m.slashMenu[1].name != "steer" {
-		t.Fatalf("slashMenu for /st = %+v, want [stats, steer]", m.slashMenu)
+	if len(m.slashMenu) != 3 || m.slashMenu[0].name != "stats" || m.slashMenu[1].name != "steer" || m.slashMenu[2].name != "steps" {
+		t.Fatalf("slashMenu for /st = %+v, want [stats, steer, steps]", m.slashMenu)
 	}
 	if m.ed.Ghost() != "ats" {
 		t.Fatalf("ghost for /st = %q, want %q", m.ed.Ghost(), "ats")

@@ -353,6 +353,13 @@ func (m *Model) handleSidebarMouse(msg tea.MouseMsg) bool {
 	if !m.twoPane() || msg.X < m.sidebarX {
 		return false
 	}
+	// Row 1 in the right-hand inspector is the active model line right under
+	// "CONTEXT & STATS". Clicking it cycles models immediately on DeepSeek (or
+	// opens the provider's model picker on multi-model providers).
+	if msg.Y == 1 {
+		m.cycleQuickModel()
+		return true
+	}
 	id, ok := m.sidebarAgentRows[msg.Y]
 	if !ok || id == "" {
 		return false

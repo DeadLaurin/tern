@@ -28,7 +28,7 @@ const (
 	DefaultReasoningEffort      = "high"
 	DefaultPermissionMode       = "ask"
 	DefaultWebPermission        = "ask"
-	DefaultMaxSteps             = 50
+	DefaultMaxSteps             = 250
 	DefaultMaxCostUSD           = 0.0
 	DefaultMaxAgents            = 4
 	DefaultMaxAgentDepth        = 1

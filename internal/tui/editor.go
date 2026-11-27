@@ -520,64 +520,104 @@ func (e *editor) View(width int, st styles) string {
 		lines = append(lines, st.paint(st.info, label)+string(e.text))
 	}
 
-	text := string(e.text)
-	rawLines := strings.Split(text, "\n")
-	lineStarts := lineStartOffsets(e.text)
-	curLine := e.CursorLine()
-	curCol := e.cursor - lineStarts[curLine]
-
-	// Keep the editor from crowding out the transcript on very long prompts.
-	startLine := 0
-	firstLine := true
-	if len(rawLines) > maxEditorRows {
-		startLine = curLine - maxEditorRows/2
-		if startLine < 0 {
-			startLine = 0
-		}
-		if startLine+maxEditorRows > len(rawLines) {
-			startLine = len(rawLines) - maxEditorRows
-		}
-		rawLines = rawLines[startLine : startLine+maxEditorRows]
-		curLine -= startLine
-		firstLine = false
-		if startLine > 0 {
-			lines = append(lines, st.paint(st.dim, "  ..."))
-		}
+	promptPrefix := "❯ "
+	if st.plain {
+		promptPrefix = "> "
+	}
+	contPrefix := "  "
+	available := width - displayWidth(promptPrefix)
+	if available < 4 {
+		available = 4
 	}
 
-	for i, raw := range rawLines {
-		prefix := "  "
-		if i == 0 && firstLine {
-			prefix = "❯ "
-			if st.plain {
-				prefix = "> "
+	// Empty editor: render placeholder cleanly on row 0.
+	if len(e.text) == 0 {
+		ph := st.paint(st.placeholder, "Ask tern anything… (/help for commands)")
+		if st.plain {
+			ph = "Ask tern anything... (/help for commands)"
+		}
+		lines = append(lines, st.paint(st.prompt, promptPrefix)+ph)
+	} else {
+		// Soft-wrap every logical line into visual rows so long paragraphs wrap
+		// naturally like a web textarea instead of scrolling off-screen horizontally.
+		type visualRow struct {
+			text       string
+			isFirst    bool
+			hasCursor  bool
+			cursorCol  int
+			atLineEnd  bool
+		}
+		var vrows []visualRow
+		curVisualRow := 0
+
+		rawLines := strings.Split(string(e.text), "\n")
+		lineStarts := lineStartOffsets(e.text)
+		curLogLine := e.CursorLine()
+		curLogCol := e.cursor - lineStarts[curLogLine]
+
+		for li, raw := range rawLines {
+			runes := []rune(raw)
+			wrapped := softWrapRunes(runes, available)
+			offset := 0
+			for wi, seg := range wrapped {
+				segLen := len(seg)
+				hasCur := false
+				cCol := 0
+				if li == curLogLine {
+					isLastSeg := wi == len(wrapped)-1
+					if curLogCol >= offset && (curLogCol < offset+segLen || (isLastSeg && curLogCol == offset+segLen)) {
+						hasCur = true
+						cCol = curLogCol - offset
+						curVisualRow = len(vrows)
+					}
+				}
+				vrows = append(vrows, visualRow{
+					text:      string(seg),
+					isFirst:   li == 0 && wi == 0,
+					hasCursor: hasCur,
+					cursorCol: cCol,
+					atLineEnd: li == curLogLine && wi == len(wrapped)-1 && curLogCol == len(runes),
+				})
+				offset += segLen
 			}
 		}
-		display := raw
-		if i == curLine {
-			display = insertCursor(raw, curCol, st)
+
+		// Keep the editor from crowding out the transcript on very long prompts.
+		startRow := 0
+		if len(vrows) > maxEditorRows {
+			startRow = curVisualRow - maxEditorRows/2
+			if startRow < 0 {
+				startRow = 0
+			}
+			if startRow+maxEditorRows > len(vrows) {
+				startRow = len(vrows) - maxEditorRows
+			}
+			if startRow > 0 {
+				lines = append(lines, st.paint(st.dim, "  …"))
+			}
+			vrows = vrows[startRow : startRow+maxEditorRows]
 		}
-		available := width - displayWidth(prefix)
-		if available < 1 {
-			available = 1
-		}
-		display = truncateAround(display, curCol, available, i == curLine)
-		if i == curLine && e.ghost != "" && curCol == len([]rune(raw)) {
-			rem := available - displayWidth(display)
-			if rem > 0 {
-				ghost := truncateCell(e.ghost, rem)
-				if ghost != "" {
-					display += st.paint(st.placeholder, ghost)
+
+		for _, vr := range vrows {
+			prefix := contPrefix
+			if vr.isFirst {
+				prefix = promptPrefix
+			}
+			display := vr.text
+			if vr.hasCursor {
+				display = insertCursor(vr.text, vr.cursorCol, st)
+				if e.ghost != "" && vr.atLineEnd {
+					rem := available - displayWidth(display)
+					if rem > 0 {
+						ghost := truncateCell(e.ghost, rem)
+						if ghost != "" {
+							display += st.paint(st.placeholder, ghost)
+						}
+					}
 				}
 			}
+			lines = append(lines, st.paint(st.prompt, prefix)+display)
 		}
-		if raw == "" && e.IsEmpty() && i == 0 && firstLine {
-			display = st.paint(st.placeholder, "Ask tern anything… (/help for commands)")
-			if st.plain {
-				display = "Ask tern anything... (/help for commands)"
-			}
-		}
-		lines = append(lines, st.paint(st.prompt, prefix)+display)
 	}
 
 	if len(e.suggestions) > 0 {
@@ -603,6 +643,43 @@ func (e *editor) View(width int, st styles) string {
 		}
 	}
 	return strings.Join(lines, "\n")
+}
+
+func softWrapRunes(runes []rune, maxWidth int) [][]rune {
+	if maxWidth < 2 || len(runes) == 0 {
+		return [][]rune{runes}
+	}
+	var out [][]rune
+	start := 0
+	for start < len(runes) {
+		w := 0
+		lastSpace := -1
+		end := start
+		for end < len(runes) {
+			rw := displayWidth(string(runes[end]))
+			if rw < 1 {
+				rw = 1
+			}
+			// Reserve 1 cell for the cursor marker when at the end of a segment.
+			if w+rw > maxWidth-1 && end > start {
+				break
+			}
+			if runes[end] == ' ' || runes[end] == '\t' {
+				lastSpace = end
+			}
+			w += rw
+			end++
+		}
+		if end < len(runes) && lastSpace > start {
+			end = lastSpace + 1
+		}
+		out = append(out, runes[start:end])
+		start = end
+	}
+	if len(out) == 0 {
+		return [][]rune{{}}
+	}
+	return out
 }
 
 func insertCursor(line string, col int, st styles) string {
