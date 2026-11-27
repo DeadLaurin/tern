@@ -203,6 +203,8 @@
       <h1>tern</h1>
       <p class="tagline">A small, fast, minimalist terminal coding agent built for DeepSeek — also supporting OpenRouter, other cloud providers, local LLMs, and ACP agents.</p>
       <div class="meta">
+        <a href="https://github.com/DeadLaurin/tern/releases/latest" id="latestBadge" style="color:var(--sage);text-decoration:none;">v0.7.3</a>
+        <span>·</span>
         <span>single static binary</span>
         <span>·</span>
         <span>~10ms startup</span>
@@ -257,11 +259,22 @@
       </div>
     </section>
 
+    <section class="section" id="changelog">
+      <h2>What's New <span id="clVer" style="color:var(--sage);font-family:var(--mono);font-size:0.85em;font-weight:500;">v0.7.3</span></h2>
+      <div id="clBody" class="card" style="padding:18px 20px;line-height:1.65;">
+        <p style="margin:0 0 8px;color:var(--text);"><strong>v0.7.3</strong> — Clickable <code>/sessions</code> with hover preview &amp; <code>Clear all</code> in <code>tern serve</code>, live <code>/steps [n]</code>, and automatic balance refresh.</p>
+        <p style="margin:0 0 8px;color:var(--muted);"><strong>v0.7.2</strong> — Auto-derived friendly session titles from first prompt &amp; <code>c clear all</code> in TUI <code>/sessions</code>.</p>
+        <p style="margin:0;color:var(--muted);"><strong>v0.7.1</strong> — Raised default max steps to 250, <code>/steps</code> command, soft-wrapping TUI textbar, and clickable sidebar model switcher.</p>
+      </div>
+      <p class="hint" style="margin-top:10px;"><a href="https://github.com/DeadLaurin/tern/blob/main/CHANGELOG.md">Read full CHANGELOG.md</a> · <a href="https://github.com/DeadLaurin/tern/releases">All GitHub Releases</a></p>
+    </section>
+
     <section class="section">
       <h2>Links</h2>
       <div class="links">
         <a href="https://github.com/DeadLaurin/tern">GitHub Repository</a>
         <a href="https://github.com/DeadLaurin/tern/releases">Releases &amp; Checksums</a>
+        <a href="https://github.com/DeadLaurin/tern/blob/main/CHANGELOG.md">Changelog</a>
         <a href="https://tern.disgusting.work/install.sh">install.sh</a>
         <a href="https://tern.disgusting.work/install.ps1">install.ps1</a>
       </div>
@@ -305,6 +318,44 @@
           navigator.clipboard.writeText(text).then(done);
         }
       });
+
+      // Live-fetch latest version & recent release notes from GitHub Releases.
+      fetch('https://api.github.com/repos/DeadLaurin/tern/releases?per_page=3')
+        .then(function (r) { return r.ok ? r.json() : null; })
+        .then(function (releases) {
+          if (!Array.isArray(releases) || !releases.length) { return; }
+          var latest = releases.find(function (x) { return !x.prerelease && !x.draft; }) || releases[0];
+          if (latest && latest.tag_name) {
+            var badge = document.getElementById('latestBadge');
+            var clVer = document.getElementById('clVer');
+            if (badge) { badge.textContent = latest.tag_name + ' · latest'; }
+            if (clVer) { clVer.textContent = latest.tag_name; }
+          }
+          var clBody = document.getElementById('clBody');
+          if (!clBody) { return; }
+          var esc = function (s) {
+            return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+          };
+          var fmt = function (md) {
+            return esc(md || '')
+              .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
+              .replace(/`([^`]+)`/g, '<code>$1</code>')
+              .replace(/^### (.+)$/gm, '<div style="color:var(--sage);font-size:0.85em;margin-top:8px;font-weight:600;">$1</div>')
+              .replace(/^- (.+)$/gm, '<div style="padding-left:12px;color:var(--muted);">• $1</div>');
+          };
+          clBody.innerHTML = releases.slice(0, 3).map(function (rel, idx) {
+            var date = rel.published_at ? rel.published_at.slice(0, 10) : '';
+            var border = idx > 0 ? 'margin-top:14px;padding-top:14px;border-top:1px solid var(--border);' : '';
+            return '<div style="' + border + '">' +
+              '<div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:4px;">' +
+              '<a href="' + esc(rel.html_url || '#') + '" style="font-family:var(--mono);font-weight:600;color:var(--text);">' + esc(rel.tag_name) + '</a>' +
+              '<span style="font-family:var(--mono);font-size:0.78em;color:var(--dim);">' + esc(date) + '</span>' +
+              '</div>' +
+              '<div style="font-size:0.9rem;">' + fmt(rel.body) + '</div>' +
+              '</div>';
+          }).join('');
+        })
+        .catch(function () {});
     })();
   </script>
 </body>
