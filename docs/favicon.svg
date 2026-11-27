@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" fill="none">
+  <rect x="1" y="1" width="62" height="62" rx="14" fill="#14171C" stroke="#2E3440" stroke-width="2"/>
+  <!-- Minimalist soaring tern bird silhouette matching tern's ASCII emblem -->
+  <path d="M10 19.5C15.5 22.8 22.5 28.2 28.5 34.5C34.5 28.5 43.2 21.8 54 15.5C47.5 24.5 41.2 31.8 36.4 37.8L45.5 40.4C40.2 42.4 34.6 43.4 29.8 43.2L15.2 48.5L23.2 41.2L12.5 39.2L24.2 36.8C19.8 31.5 14.5 25.5 10 19.5Z" fill="#E6EAF0"/>
+  <!-- Subtle sage accent along the leading wing edge -->
+  <path d="M29.8 33.6C35.2 28.2 42.8 22.2 52.2 16.8C45.6 23.4 39.4 29.6 34.8 34.8L29.8 33.6Z" fill="#8FBC8F"/>
+</svg>

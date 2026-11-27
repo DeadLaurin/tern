@@ -11,6 +11,10 @@
        ██████▀▀▀▀████▀▀▀▀▀
 ```
 
+<p align="left">
+  <img src="assets/icon.svg" alt="tern" width="56" height="56" />
+</p>
+
 # tern
 
 A small, fast, minimalist terminal coding agent built for **DeepSeek**, with first-class support for **OpenRouter**, other cloud providers, local models, and multi-agent / ACP workflows.
