@@ -904,7 +904,47 @@ func (s scannedSession) displayName() string {
 	if s.name != "" {
 		return s.name
 	}
-	return s.meta.Name
+	if s.meta.Name != "" {
+		return s.meta.Name
+	}
+	return deriveFriendlyTitle(s.active)
+}
+
+// deriveFriendlyTitle builds a concise, human-friendly session title from the
+// first non-empty user message so unnamed sessions are easy to recognize later.
+func deriveFriendlyTitle(messages []provider.Message) string {
+	for _, msg := range messages {
+		if msg.Role != provider.RoleUser {
+			continue
+		}
+		text := msg.Content
+		if text == "" {
+			for _, part := range msg.Parts {
+				if part.Text != "" {
+					text += " " + part.Text
+				}
+			}
+		}
+		text = strings.Join(strings.Fields(strings.TrimSpace(text)), " ")
+		if text == "" {
+			continue
+		}
+		runes := []rune(text)
+		const maxLen = 48
+		if len(runes) <= maxLen {
+			return text
+		}
+		// Trim cleanly at a word boundary when possible.
+		cut := maxLen
+		for cut > 24 && runes[cut] != ' ' {
+			cut--
+		}
+		if cut <= 24 {
+			cut = maxLen
+		}
+		return strings.TrimRight(string(runes[:cut]), " .,;:-") + "…"
+	}
+	return ""
 }
 
 func (s scannedSession) preview() string {

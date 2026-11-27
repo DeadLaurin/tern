@@ -86,8 +86,9 @@ type modalState struct {
 	renameText  string
 	renameFresh bool
 
-	confirmDelete bool
-	notice        string
+	confirmDelete   bool
+	confirmClearAll bool
+	notice          string
 
 	allModels         []modelChoice
 	models            []modelChoice
@@ -939,6 +940,29 @@ func (m *Model) handleSessionsModalKey(msg tea.KeyMsg) tea.Cmd {
 	if m.modal.rename {
 		return m.handleSessionRenameKey(msg)
 	}
+	if m.modal.confirmClearAll {
+		switch msg.Type {
+		case tea.KeyRunes:
+			switch strings.ToLower(string(msg.Runes)) {
+			case "y":
+				m.clearInactiveSessions()
+				return nil
+			case "n":
+				m.modal.confirmClearAll = false
+				m.modal.notice = ""
+				return nil
+			}
+			return nil
+		case tea.KeyEsc, tea.KeySpace:
+			m.modal.confirmClearAll = false
+			m.modal.notice = ""
+			return nil
+		case tea.KeyEnter:
+			m.clearInactiveSessions()
+			return nil
+		}
+		return nil
+	}
 	if m.modal.confirmDelete {
 		switch msg.Type {
 		case tea.KeyRunes:
@@ -1009,6 +1033,9 @@ func (m *Model) handleSessionsModalKey(msg tea.KeyMsg) tea.Cmd {
 				return nil
 			case "d":
 				m.armSessionDelete()
+				return nil
+			case "c":
+				m.armSessionClearAll()
 				return nil
 			case "/":
 				m.modal.filterActive = true
@@ -1143,6 +1170,50 @@ func (m *Model) deleteSelectedSession() {
 		return
 	}
 	m.modal.notice = "Deleted session " + selected.ID + "."
+	m.refreshSessions()
+}
+
+func (m *Model) armSessionClearAll() {
+	if m.opts.SessionStore == nil {
+		return
+	}
+	activeID := ""
+	if m.opts.Session != nil {
+		activeID = m.opts.Session.ID()
+	}
+	count := 0
+	for _, s := range m.modal.sessions {
+		if s.ID != activeID {
+			count++
+		}
+	}
+	if count == 0 {
+		m.modal.notice = "No inactive sessions to clear."
+		return
+	}
+	m.modal.confirmClearAll = true
+	m.modal.notice = fmt.Sprintf("Clear all %d inactive session(s)? y/n", count)
+}
+
+func (m *Model) clearInactiveSessions() {
+	m.modal.confirmClearAll = false
+	if m.opts.SessionStore == nil {
+		return
+	}
+	activeID := ""
+	if m.opts.Session != nil {
+		activeID = m.opts.Session.ID()
+	}
+	deleted := 0
+	for _, s := range m.modal.sessions {
+		if s.ID == activeID {
+			continue
+		}
+		if err := m.opts.SessionStore.Delete(s.ID); err == nil {
+			deleted++
+		}
+	}
+	m.modal.notice = fmt.Sprintf("Cleared %d inactive session(s).", deleted)
 	m.refreshSessions()
 }
 
@@ -1344,7 +1415,7 @@ func (m *Model) sessionsModalView() string {
 		b.WriteString("\n" + m.st.paint(m.st.amber, m.modal.notice))
 	}
 	return m.modalFrame("Sessions", strings.TrimRight(b.String(), "\n"),
-		"↑/↓ select · enter open · n new · f fork · r rename · d delete · esc close")
+		"↑/↓ select · enter open · n new · f fork · r rename · d delete · c clear all · esc close")
 }
 
 // ---------------------------------------------------------------------------

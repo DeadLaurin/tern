@@ -4,6 +4,12 @@ All notable changes to tern are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and tern adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v0.7.2] - 2026-11-27
+
+### Added
+- **Friendly default session names**: unnamed sessions now automatically derive a clean, readable title from their first user prompt (up to 48 characters at a word boundary) so past conversations are easy to recognize in `/sessions`.
+- **Clear all inactive sessions in TUI `/sessions`**: press `c` (with `y/n` confirmation) to clear all inactive sessions while keeping the current session safe.
+
 ## [v0.7.1] - 2026-11-27
 
 ### Added
@@ -139,6 +145,7 @@ All notable changes to tern are documented here. The format is based on
 - `tern doctor` section headers render in order.
 - All `IsParallelSafe` tools, including task sub-agents, run concurrently.
 
+[v0.7.2]: https://github.com/DeadLaurin/tern/compare/v0.7.1...v0.7.2
 [v0.7.1]: https://github.com/DeadLaurin/tern/compare/v0.7.0...v0.7.1
 [v0.7.0]: https://github.com/DeadLaurin/tern/compare/v0.6.2...v0.7.0
 [v0.6.2]: https://github.com/DeadLaurin/tern/compare/v0.6.1...v0.6.2
