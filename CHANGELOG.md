@@ -4,6 +4,19 @@ All notable changes to tern are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and tern adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v0.7.0] - 2026-11-27
+
+### Added
+- **Multi-currency balance checking**: `tern balance [--provider <name>] [--json]`, TUI `/balance` + live sidebar balance, and `tern serve` `/api/balance` + sidebar readout for DeepSeek (showing both CNY and USD with currency symbols/codes, e.g. `¥12.09 CNY · $0.02 USD left`) and OpenRouter (`/credits` with `/auth/key` fallback).
+- **Google Gemini (Free Tier) & data-collection notices**: added `gemini` (`gemini-2.5-flash` / `gemini-2.5-pro`, 1M context, free tier via Google AI Studio) alongside OpenRouter `:free` and Groq free tiers, with clear data-collection disclosures in `tern providers`, the TUI `/provider` modal, and `tern serve`.
+- **Clickable sub-agent tabs in `tern serve`**: clicking any sub-agent in the `SUB-AGENTS` sidebar opens it in a live tab (`Main` | `<agent>`) displaying its thought process, tool calls, output, and a Cancel button.
+- **Full `tern serve` Web UI parity**: interactive `ask_user` prompts (`/api/ask`), live `SUB-AGENTS` and `TASKS` sidebar sections, `/sessions` browser & `/name` rename, `/theme [dark|light]` toggle, interactive `/skills` & `/plugins` modals, and clipboard image paste in the composer.
+
+### Fixed
+- **Sub-agent approvals in `tern serve`**: wired `Subagents.Approvals().SetApprover` so sub-agent tool calls prompt the browser instead of failing with `no approval handler configured`.
+- **`Allow turn` and `Allow session` in `tern serve`**: `Allow session` and `Allow turn` now actually auto-approve subsequent calls instead of prompting on every tool execution.
+- **Chronological tool/response ordering in `tern serve`**: assistant responses and thinking streamed after tool/sub-agent execution now render strictly below the tool/task rows, with human-readable tool durations (`12.4s`, `2m 52s`).
+
 ## [v0.6.2] - 2026-11-26
 
 ### Added
@@ -115,6 +128,7 @@ All notable changes to tern are documented here. The format is based on
 - `tern doctor` section headers render in order.
 - All `IsParallelSafe` tools, including task sub-agents, run concurrently.
 
+[v0.7.0]: https://github.com/DeadLaurin/tern/compare/v0.6.2...v0.7.0
 [v0.6.2]: https://github.com/DeadLaurin/tern/compare/v0.6.1...v0.6.2
 [v0.6.1]: https://github.com/DeadLaurin/tern/compare/v0.6.0...v0.6.1
 [v0.6.0]: https://github.com/DeadLaurin/tern/compare/v0.5.1...v0.6.0

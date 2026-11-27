@@ -90,10 +90,26 @@ func ensureAPIKeyForProvider(providerName string, in io.Reader, out, errOut io.W
 	return key, nil
 }
 
+// providerNeedsNoKey reports whether cfg targets a provider that does not
+// require a hosted API key (loopback servers, free public endpoints, or local
+// CLI-agent backends like Claude Code, Codex, and Antigravity).
+func providerNeedsNoKey(cfg *config.Config) bool {
+	if cfg == nil {
+		return false
+	}
+	if isLoopbackBaseURL(cfg.BaseURL) {
+		return true
+	}
+	if preset, ok := config.LookupProvider(cfg.Provider); ok && !preset.RequiresKey {
+		return true
+	}
+	return false
+}
+
 // newProviderClient builds an HTTP streaming client configured for cfg's
 // provider preset (base URL, API key, and provider-specific headers such as
 // OpenRouter attribution headers).
-func newProviderClient(cfg *config.Config) *provider.DeepSeekClient {
+func newProviderClient(cfg *config.Config) provider.Provider {
 	var extraHeaders map[string]string
 	if preset, ok := config.LookupProvider(cfg.Provider); ok && len(preset.ExtraHeaders) > 0 {
 		extraHeaders = preset.ExtraHeaders

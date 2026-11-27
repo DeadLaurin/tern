@@ -638,11 +638,40 @@ func TestServeProvidersModelsAndCommandEndpoints(t *testing.T) {
 		t.Fatalf("POST /api/provider = %d %v", resp.StatusCode, body)
 	}
 
-	for _, ep := range []string{"/api/changelog", "/api/config", "/api/skills", "/api/plugins"} {
+	for _, ep := range []string{"/api/changelog", "/api/config", "/api/skills", "/api/plugins", "/api/sessions"} {
 		r, b := doJSON(t, client, http.MethodGet, env.http.URL+ep, nil)
 		if r.StatusCode != http.StatusOK {
 			t.Fatalf("GET %s = %d %v", ep, r.StatusCode, b)
 		}
+	}
+}
+
+func TestServeAllowSessionAutoApprovesSubsequentCalls(t *testing.T) {
+	env := newTestEnv(t, testEnvOptions{})
+	client := &http.Client{Timeout: 5 * time.Second}
+
+	// Simulate first approval request on a goroutine and answer with allow_session.
+	done := make(chan bool, 1)
+	go func() {
+		ok, _ := env.server.onApprove(t.Context(), agent.ApprovalRequest{ToolName: "bash", Command: "echo 1"})
+		done <- ok
+	}()
+	pending := waitForApproval(t, client, env.http.URL)
+	resp, _ := doJSON(t, client, http.MethodPost, env.http.URL+"/api/approve", map[string]string{
+		"id":       pending["id"].(string),
+		"decision": "allow_session",
+	})
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("approve allow_session = %d, want 200", resp.StatusCode)
+	}
+	if !<-done {
+		t.Fatal("first approval should be allowed")
+	}
+
+	// Second call must return true immediately without blocking for another prompt.
+	ok, err := env.server.onApprove(t.Context(), agent.ApprovalRequest{ToolName: "bash", Command: "echo 2"})
+	if err != nil || !ok {
+		t.Fatalf("second approval after allow_session = (%v, %v), want (true, nil)", ok, err)
 	}
 }
 

@@ -170,6 +170,17 @@ func (m *Model) sidebarContext(width int) string {
 	if branch := strings.TrimSpace(m.opts.GitBranch); branch != "" {
 		lines = append(lines, m.st.paint(m.st.dim, truncateCell("branch "+branch, width)))
 	}
+	if m.balance != nil {
+		if compact := m.balance.FormatCompact(); compact != "" {
+			balStyle := m.st.success
+			if m.balance.HasLimit && (!m.balance.Available || m.balance.Remaining < 1.0) {
+				balStyle = m.st.warn
+			} else if m.balance.IsFreeTier {
+				balStyle = m.st.dim
+			}
+			lines = append(lines, m.st.paint(balStyle, truncateCell("Bal "+compact, width)))
+		}
+	}
 
 	barWidth := 12
 	if width < 36 {

@@ -182,8 +182,10 @@ func runServeCommand(args []string, o runOptions) int {
 	// First-run authentication mirrors the CLI: loopback base URLs (Ollama,
 	// LM Studio, vLLM) are offline endpoints without an API key.
 	if strings.TrimSpace(cfg.APIKey) == "" {
-		if isLoopbackBaseURL(cfg.BaseURL) {
-			cfg.APIKey = "local"
+		if providerNeedsNoKey(cfg) {
+			if isLoopbackBaseURL(cfg.BaseURL) {
+				cfg.APIKey = "local"
+			}
 		} else {
 			key, authErr := ensureAPIKeyForProvider(cfg.Provider, o.In, o.Out, o.Err, o.StdinTTY)
 			if authErr != nil {
@@ -285,6 +287,8 @@ func runServeCommand(args []string, o runOptions) int {
 		Config:              cfg,
 		Permissions:         rt.Permissions,
 		Checkpoints:         rt.Checkpoints,
+		Subagents:           rt.Subagents,
+		Todos:               rt.Todos,
 		OnConfigureProvider: onConfigureProvider,
 		Version:             o.Version,
 		WorkDir:             workDir,

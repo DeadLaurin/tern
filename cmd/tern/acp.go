@@ -66,8 +66,10 @@ func runACPCommand(args []string, o runOptions) int {
 	prov := o.Provider
 	if prov == nil {
 		if strings.TrimSpace(cfg.APIKey) == "" {
-			if isLoopbackBaseURL(cfg.BaseURL) {
-				cfg.APIKey = "local"
+			if providerNeedsNoKey(cfg) {
+				if isLoopbackBaseURL(cfg.BaseURL) {
+					cfg.APIKey = "local"
+				}
 			} else {
 				key, authErr := ensureAPIKeyForProvider(cfg.Provider, o.In, o.Out, o.Err, o.StdinTTY)
 				if authErr != nil {

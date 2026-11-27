@@ -535,6 +535,112 @@
   /* Visibility toggles for /thinking and /tools */
   #app.hide-thinking .reasoning { display: none; }
   #app.hide-tools .tool-card { display: none; }
+  body.theme-light {
+    --bg: #f6f4ef;
+    --surface: #ece9e1;
+    --border: #c9c3b6;
+    --accent: #16150f;
+    --text: #1c1b16;
+    --muted: #5a554a;
+    --subtle: #7a7467;
+    --sage: #2d6a4f;
+    --amber: #9a6700;
+    --coral: #b42318;
+  }
+  #askCard {
+    margin: 0 0 8px;
+    padding: 10px 12px;
+    border: 1px solid var(--border);
+    border-left: 2px solid var(--sage);
+    border-radius: 4px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+  #askCard.hidden { display: none; }
+  .ask-options { display: flex; flex-wrap: wrap; gap: 6px; }
+  .attach-bar { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 6px; }
+  .attach-bar.hidden { display: none; }
+  .attach-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 2px 8px;
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    font-size: 0.84em;
+    color: var(--muted);
+  }
+  .attach-chip button {
+    background: transparent;
+    border: none;
+    color: var(--coral);
+    cursor: pointer;
+    font: inherit;
+    padding: 0;
+  }
+  .sb-list { display: flex; flex-direction: column; gap: 4px; font-size: 0.88em; }
+  .sb-item { color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .sb-item.done { color: var(--subtle); text-decoration: line-through; }
+  .sb-item.running { color: var(--amber); }
+  .sb-item.clickable {
+    background: transparent;
+    border: 1px solid transparent;
+    border-radius: 4px;
+    padding: 4px 6px;
+    text-align: left;
+    font: inherit;
+    cursor: pointer;
+    width: 100%;
+  }
+  .sb-item.clickable:hover { border-color: var(--border); color: var(--text); }
+  .sb-item.clickable.active { border-color: var(--muted); color: var(--accent); background: rgba(255,255,255,0.04); }
+  .view-tabs {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding-bottom: 8px;
+    margin-bottom: 6px;
+    border-bottom: 1px solid var(--border);
+    overflow-x: auto;
+  }
+  .view-tabs.hidden { display: none; }
+  .view-tab {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    background: transparent;
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    color: var(--muted);
+    font: inherit;
+    font-size: 0.85em;
+    padding: 3px 9px;
+    cursor: pointer;
+    white-space: nowrap;
+  }
+  .view-tab.active { color: var(--accent); border-color: var(--accent); background: rgba(255,255,255,0.05); }
+  .view-tab .tab-x { color: var(--subtle); margin-left: 2px; }
+  .view-tab .tab-x:hover { color: var(--coral); }
+  #subagentView {
+    flex: 1;
+    overflow-y: auto;
+    padding: 4px 0 16px;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+  #subagentView.hidden { display: none; }
+  .sa-thought {
+    border-left: 2px solid var(--subtle);
+    padding: 6px 10px;
+    color: var(--muted);
+    font-size: 0.9em;
+    white-space: pre-wrap;
+    background: rgba(255,255,255,0.02);
+    border-radius: 0 4px 4px 0;
+  }
+  .sa-thought-head { font-size: 0.82em; color: var(--subtle); margin-bottom: 4px; font-weight: 600; }
 
   /* Centered CLI-styled modal overlay (Provider -> Model wizard & Changelog) */
   .modal-backdrop {
@@ -718,6 +824,8 @@
   <div class="drawer-backdrop" id="drawerBackdrop"></div>
 
   <section class="pane-main">
+    <div id="viewTabs" class="view-tabs hidden"></div>
+    <div id="subagentView" class="hidden"></div>
     <div id="transcript">
       <div class="welcome" id="welcome">
         <pre class="emblem" aria-hidden="true">▄▄▄▄                                 ▄
@@ -745,15 +853,27 @@
       <div class="appr-reason" id="apprReason"></div>
       <pre class="appr-diff hidden" id="apprDiff"></pre>
       <div class="appr-actions">
-        <button class="cli-btn ok" id="allowBtn" type="button">Allow</button>
+        <button class="cli-btn ok" id="allowBtn" type="button">Allow once</button>
+        <button class="cli-btn" id="allowTurnBtn" type="button">Allow turn</button>
         <button class="cli-btn" id="allowSessionBtn" type="button">Allow session</button>
         <button class="cli-btn no" id="denyBtn" type="button">Deny</button>
+      </div>
+    </div>
+
+    <div id="askCard" class="hidden">
+      <div class="appr-head">Question from tern</div>
+      <div class="appr-detail" id="askQuestion"></div>
+      <div class="ask-options" id="askOptions"></div>
+      <div class="filter-bar">
+        <input class="modal-input" id="askInput" type="text" placeholder="Type an answer and press Enter…">
+        <button class="cli-btn ok" id="askSendBtn" type="button">Answer</button>
       </div>
     </div>
 
     <div class="live-status" id="liveStatus">Ready</div>
 
     <div id="slashMenu" class="hidden"></div>
+    <div id="attachBar" class="attach-bar hidden"></div>
 
     <div class="composer-box" id="composerBox">
       <span class="composer-prompt">❯</span>
@@ -782,6 +902,7 @@
       <div class="sb-gauge" id="sbCtx"></div>
       <div class="sb-gauge" id="sbCache"></div>
       <div class="sb-stats" id="sbStats"></div>
+      <div class="sb-dim" id="sbBalance"></div>
     </div>
 
     <div>
@@ -816,6 +937,16 @@
       </div>
     </div>
 
+    <div id="sbAgentsWrap" class="hidden">
+      <div class="sb-head">SUB-AGENTS</div>
+      <div class="sb-list" id="sbAgents"></div>
+    </div>
+
+    <div id="sbTodosWrap" class="hidden">
+      <div class="sb-head">TASKS</div>
+      <div class="sb-list" id="sbTodos"></div>
+    </div>
+
     <button class="sb-logout hidden" id="logout" type="button">logout</button>
   </aside>
 </div>
@@ -838,6 +969,7 @@
   var MODELS = ["deepseek-flash", "deepseek-v4-pro"];
   var EFFORTS = ["none", "low", "high", "max"];
   var SLASH_COMMANDS = [
+    { name: "balance",   desc: "Check remaining provider credit balance" },
     { name: "changelog", desc: "Show what's new in tern" },
     { name: "clear",     desc: "Clear transcript view" },
     { name: "compact",   desc: "Compact conversation context" },
@@ -849,12 +981,15 @@
     { name: "ext",       desc: "List loaded plugins (alias)" },
     { name: "help",      desc: "Show available commands" },
     { name: "model",     desc: "Browse & switch models (/model free)" },
+    { name: "name",      desc: "Rename current session" },
     { name: "plan",      desc: "Toggle read-only plan mode" },
-    { name: "plugins",   desc: "List loaded plugins" },
+    { name: "plugins",   desc: "Browse loaded plugins" },
     { name: "provider",  desc: "Choose or switch AI provider" },
-    { name: "skills",    desc: "List discovered skills" },
+    { name: "sessions",  desc: "Browse & manage saved sessions" },
+    { name: "skills",    desc: "Browse discovered skills" },
     { name: "stats",     desc: "Usage, cache & cost summary" },
     { name: "steer",     desc: "Steer active turn mid-flight" },
+    { name: "theme",     desc: "Switch color theme (dark / light)" },
     { name: "thinking",  desc: "Toggle thinking visibility or effort" },
     { name: "tools",     desc: "Toggle tool display (compact/hidden)" },
     { name: "undo",      desc: "Undo latest file edit turn" },
@@ -879,8 +1014,21 @@
     apprReason: document.getElementById("apprReason"),
     apprDiff: document.getElementById("apprDiff"),
     allowBtn: document.getElementById("allowBtn"),
+    allowTurnBtn: document.getElementById("allowTurnBtn"),
     allowSessionBtn: document.getElementById("allowSessionBtn"),
     denyBtn: document.getElementById("denyBtn"),
+    askCard: document.getElementById("askCard"),
+    askQuestion: document.getElementById("askQuestion"),
+    askOptions: document.getElementById("askOptions"),
+    askInput: document.getElementById("askInput"),
+    askSendBtn: document.getElementById("askSendBtn"),
+    attachBar: document.getElementById("attachBar"),
+    sbAgentsWrap: document.getElementById("sbAgentsWrap"),
+    sbAgents: document.getElementById("sbAgents"),
+    sbTodosWrap: document.getElementById("sbTodosWrap"),
+    sbTodos: document.getElementById("sbTodos"),
+    viewTabs: document.getElementById("viewTabs"),
+    subagentView: document.getElementById("subagentView"),
     liveStatus: document.getElementById("liveStatus"),
     slashMenu: document.getElementById("slashMenu"),
     composerBox: document.getElementById("composerBox"),
@@ -895,6 +1043,7 @@
     sbCtx: document.getElementById("sbCtx"),
     sbCache: document.getElementById("sbCache"),
     sbStats: document.getElementById("sbStats"),
+    sbBalance: document.getElementById("sbBalance"),
     providerBtn: document.getElementById("providerBtn"),
     model: document.getElementById("model"),
     effort: document.getElementById("effort"),
@@ -1009,6 +1158,7 @@
       }
       showApp();
       refreshStatus();
+      refreshBalance(false);
       loadHistory();
       connectEvents();
     }).catch(function () {
@@ -1028,7 +1178,7 @@
     };
     ["turn_start", "reasoning_delta", "text_delta", "steer",
      "tool_start", "tool_end", "usage", "compact", "turn_end", "error",
-     "approval_request", "approval_resolved"].forEach(function (type) {
+     "approval_request", "approval_resolved", "ask_user", "ask_resolved"].forEach(function (type) {
       es.addEventListener(type, function (ev) {
         var data = {};
         try { data = JSON.parse(ev.data); } catch (e) { return; }
@@ -1082,6 +1232,154 @@
       showApproval(st.pending_approval);
     } else if (state.pendingApproval) {
       hideApproval();
+    }
+    if (st.pending_ask) {
+      showAsk(st.pending_ask);
+    } else if (state.pendingAsk) {
+      hideAsk();
+    }
+    renderSidebarAgentsAndTodos(st);
+  }
+
+  state.openTabs = [];
+  state.activeTab = "main";
+  state.subagentPoll = null;
+
+  function renderViewTabs() {
+    if (!el.viewTabs) { return; }
+    el.viewTabs.classList.toggle("hidden", state.openTabs.length === 0);
+    el.viewTabs.innerHTML = "";
+    var mainBtn = document.createElement("button");
+    mainBtn.type = "button";
+    mainBtn.className = "view-tab" + (state.activeTab === "main" ? " active" : "");
+    mainBtn.textContent = "Main";
+    mainBtn.addEventListener("click", function () { switchTab("main"); });
+    el.viewTabs.appendChild(mainBtn);
+
+    state.openTabs.forEach(function (tab) {
+      var btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "view-tab" + (state.activeTab === tab.id ? " active" : "");
+      btn.innerHTML = '<span>' + escapeHTML(tab.label) + '</span><span class="tab-x" title="Close tab">×</span>';
+      btn.addEventListener("click", function (ev) {
+        if (ev.target && ev.target.classList.contains("tab-x")) {
+          closeSubagentTab(tab.id);
+          return;
+        }
+        switchTab(tab.id);
+      });
+      el.viewTabs.appendChild(btn);
+    });
+  }
+
+  function openSubagentTab(id, label) {
+    if (!state.openTabs.some(function (t) { return t.id === id; })) {
+      state.openTabs.push({ id: id, label: label || id });
+    }
+    switchTab(id);
+  }
+
+  function closeSubagentTab(id) {
+    state.openTabs = state.openTabs.filter(function (t) { return t.id !== id; });
+    if (state.activeTab === id) { switchTab("main"); } else { renderViewTabs(); }
+  }
+
+  function switchTab(id) {
+    state.activeTab = id;
+    if (state.subagentPoll) { clearInterval(state.subagentPoll); state.subagentPoll = null; }
+    var isMain = id === "main";
+    el.transcript.classList.toggle("hidden", !isMain);
+    el.subagentView.classList.toggle("hidden", isMain);
+    renderViewTabs();
+    if (!isMain) {
+      loadSubagentTranscript(id);
+      state.subagentPoll = setInterval(function () {
+        if (state.activeTab === id) { loadSubagentTranscript(id); }
+      }, 1500);
+    }
+  }
+
+  function loadSubagentTranscript(id) {
+    api("/api/subagents/transcript?id=" + encodeURIComponent(id)).then(function (data) {
+      if (state.activeTab !== id) { return; }
+      var st = data.status || {};
+      var msgs = data.messages || [];
+      var html = '<div class="filter-bar" style="justify-content:space-between;border-bottom:1px solid var(--border);padding-bottom:8px;">' +
+        '<div><strong>' + escapeHTML(st.AgentType || "sub-agent") + '</strong> <span class="sb-dim">' + escapeHTML(id) + ' · ' + escapeHTML(st.Status || "") + (st.Step ? (" · step " + st.Step) : "") + '</span></div>' +
+        (st.Status === "running" ? '<button class="cli-btn no" id="saCancelBtn" type="button">Cancel agent</button>' : '') +
+        '</div>';
+      if (st.Description) {
+        html += '<div class="sb-dim">Task: ' + escapeHTML(st.Description) + '</div>';
+      }
+      if (!msgs.length) {
+        html += '<div class="sb-dim">' + (st.Status === "running" ? "Thinking… waiting for first output." : (st.Summary || "No transcript messages recorded.")) + '</div>';
+      } else {
+        msgs.forEach(function (m) {
+          if (m.reasoning) {
+            html += '<div class="sa-thought"><div class="sa-thought-head">▸ Thought process</div>' + escapeHTML(m.reasoning) + '</div>';
+          }
+          if (m.tool_calls && m.tool_calls.length) {
+            m.tool_calls.forEach(function (tc) {
+              html += '<div class="sb-dim">⚙ ' + escapeHTML(tc.name) + (tc.args ? (" · " + escapeHTML(tc.args.slice(0, 140))) : "") + '</div>';
+            });
+          }
+          if (m.content) {
+            if (m.role === "user") {
+              html += '<div class="user-msg">' + escapeHTML(m.content) + '</div>';
+            } else if (m.role === "tool") {
+              html += '<pre class="appr-diff">' + escapeHTML(m.content.slice(0, 800)) + '</pre>';
+            } else {
+              html += '<div class="assistant-text">' + renderMarkdown(m.content) + '</div>';
+            }
+          }
+        });
+      }
+      el.subagentView.innerHTML = html;
+      var cancelBtn = document.getElementById("saCancelBtn");
+      if (cancelBtn) {
+        cancelBtn.addEventListener("click", function () {
+          api("/api/subagents/cancel", { method: "POST", body: { id: id } }).then(function () {
+            refreshStatus();
+            loadSubagentTranscript(id);
+          });
+        });
+      }
+    }).catch(function (err) {
+      el.subagentView.innerHTML = '<div class="modal-err">' + escapeHTML(err.message) + '</div>';
+    });
+  }
+
+  function renderSidebarAgentsAndTodos(st) {
+    var agents = st.subagents || [];
+    if (el.sbAgentsWrap && el.sbAgents) {
+      el.sbAgentsWrap.classList.toggle("hidden", agents.length === 0);
+      el.sbAgents.innerHTML = "";
+      agents.forEach(function (a) {
+        var btn = document.createElement("button");
+        btn.type = "button";
+        btn.className = "sb-item clickable" + (a.Status === "running" ? " running" : "") + (state.activeTab === a.ID ? " active" : "");
+        var glyph = a.Status === "running" ? "◐ " : (a.Status === "failed" ? "✗ " : "✓ ");
+        var label = (a.AgentType || a.ID);
+        btn.textContent = glyph + label + (a.CurrentTool ? " · " + a.CurrentTool : "");
+        btn.title = "Click to open " + label + " thought process in a tab";
+        btn.addEventListener("click", function () {
+          closeDrawer();
+          openSubagentTab(a.ID, label);
+        });
+        el.sbAgents.appendChild(btn);
+      });
+    }
+    var todos = st.todos || [];
+    if (el.sbTodosWrap && el.sbTodos) {
+      el.sbTodosWrap.classList.toggle("hidden", todos.length === 0);
+      el.sbTodos.innerHTML = "";
+      todos.forEach(function (t) {
+        var row = document.createElement("div");
+        row.className = "sb-item" + (t.status === "completed" ? " done" : (t.status === "in_progress" ? " running" : ""));
+        var glyph = t.status === "completed" ? "✓ " : (t.status === "in_progress" ? "◐ " : "○ ");
+        row.textContent = glyph + (t.content || t.text || "");
+        el.sbTodos.appendChild(row);
+      });
     }
   }
 
@@ -1409,9 +1707,33 @@
     div.appendChild(line);
     div.appendChild(out);
     (state.turn ? state.turn.wrap : el.transcript).appendChild(div);
+    // Reset active text & reasoning blocks so any post-tool reasoning or
+    // response renders strictly BELOW the tool/task cards in chronological order.
+    if (state.turn) {
+      if (state.turn.text) {
+        var oldCaret = state.turn.text.querySelector(".caret");
+        if (oldCaret) { oldCaret.remove(); }
+      }
+      state.turn.text = null;
+      state.turn.raw = "";
+      state.turn.rDetails = null;
+      state.turn.rSummary = null;
+      state.turn.rBody = null;
+      state.turn.rawR = "";
+    }
     if (id) { state.toolCards[id] = { div: div, meta: meta, out: out }; }
     scrollBottom(false);
     return div;
+  }
+
+  function formatToolDuration(ms) {
+    if (!ms || ms <= 0) { return "done"; }
+    if (ms < 1000) { return ms + "ms"; }
+    var sec = ms / 1000;
+    if (sec < 60) { return sec.toFixed(1) + "s"; }
+    var m = Math.floor(sec / 60);
+    var s = Math.round(sec % 60);
+    return m + "m " + s + "s";
   }
 
   function finishToolCard(id, name, output, isError, durationMs) {
@@ -1422,7 +1744,7 @@
       if (id) { state.toolCards[id] = ref; }
     }
     if (isError) { ref.div.classList.add("error"); ref.out.classList.remove("hidden"); }
-    ref.meta.textContent = "· " + (isError ? "failed" : (durationMs ? durationMs + "ms" : "done"));
+    ref.meta.textContent = "· " + (isError ? "failed" : formatToolDuration(durationMs));
     ref.out.textContent = output || "(no output)";
     scrollBottom(false);
   }
@@ -1559,6 +1881,12 @@
       case "approval_resolved":
         if (state.pendingApproval && state.pendingApproval.id === ev.id) { hideApproval(); }
         break;
+      case "ask_user":
+        showAsk(ev);
+        break;
+      case "ask_resolved":
+        if (state.pendingAsk && state.pendingAsk.id === ev.id) { hideAsk(); }
+        break;
     }
   }
 
@@ -1595,8 +1923,81 @@
   }
 
   el.allowBtn.addEventListener("click", function () { answerApproval("allow"); });
+  if (el.allowTurnBtn) { el.allowTurnBtn.addEventListener("click", function () { answerApproval("allow_turn"); }); }
   el.allowSessionBtn.addEventListener("click", function () { answerApproval("allow_session"); });
   el.denyBtn.addEventListener("click", function () { answerApproval("deny"); });
+
+  function showAsk(req) {
+    state.pendingAsk = req;
+    el.askQuestion.textContent = req.question || "";
+    el.askOptions.innerHTML = "";
+    (req.options || []).forEach(function (opt) {
+      var btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "chip-btn";
+      btn.textContent = opt;
+      btn.addEventListener("click", function () { answerAsk(opt); });
+      el.askOptions.appendChild(btn);
+    });
+    el.askInput.value = "";
+    el.askCard.classList.remove("hidden");
+    el.askInput.focus();
+  }
+  function hideAsk() {
+    state.pendingAsk = null;
+    el.askCard.classList.add("hidden");
+  }
+  function answerAsk(text) {
+    if (!state.pendingAsk) { return; }
+    var id = state.pendingAsk.id;
+    api("/api/ask", { method: "POST", body: { id: id, answer: text } })
+      .then(hideAsk)
+      .catch(function (err) { addError(err.message); });
+  }
+  el.askSendBtn.addEventListener("click", function () {
+    var v = el.askInput.value.trim();
+    if (v) { answerAsk(v); }
+  });
+  el.askInput.addEventListener("keydown", function (ev) {
+    if (ev.key === "Enter") {
+      ev.preventDefault();
+      var v = el.askInput.value.trim();
+      if (v) { answerAsk(v); }
+    }
+  });
+
+  state.attachments = [];
+  function renderAttachments() {
+    if (!el.attachBar) { return; }
+    el.attachBar.classList.toggle("hidden", state.attachments.length === 0);
+    el.attachBar.innerHTML = "";
+    state.attachments.forEach(function (att, idx) {
+      var chip = document.createElement("span");
+      chip.className = "attach-chip";
+      chip.innerHTML = '<span>🖼 ' + escapeHTML(att.name) + '</span><button type="button" title="remove">×</button>';
+      chip.querySelector("button").addEventListener("click", function () {
+        state.attachments.splice(idx, 1);
+        renderAttachments();
+      });
+      el.attachBar.appendChild(chip);
+    });
+  }
+  el.input.addEventListener("paste", function (ev) {
+    var items = (ev.clipboardData && ev.clipboardData.items) || [];
+    for (var i = 0; i < items.length; i++) {
+      if (items[i].type && items[i].type.indexOf("image/") === 0) {
+        var file = items[i].getAsFile();
+        if (!file) { continue; }
+        ev.preventDefault();
+        var reader = new FileReader();
+        reader.onload = function (e) {
+          state.attachments.push({ name: file.name || "pasted-image.png", dataUrl: e.target.result });
+          renderAttachments();
+        };
+        reader.readAsDataURL(file);
+      }
+    }
+  });
 
   /* ---------------- live slash-command autocomplete ---------------- */
 
@@ -1705,7 +2106,8 @@
         btn.className = "modal-row" + (p.active ? " active" : "");
         var badges = "";
         if (p.recommended) { badges += '<span class="badge badge-rec">★ recommended</span>'; }
-        if (p.local) { badges += '<span class="badge">local · no key</span>'; }
+        if (p.free_tier) { badges += '<span class="badge badge-free">free tier</span>'; }
+        if (p.local) { badges += '<span class="badge">local · private</span>'; }
         else if (p.has_key) { badges += '<span class="badge badge-saved">key saved</span>'; }
         btn.innerHTML =
           '<span class="modal-row-main"><span class="modal-row-name">' + escapeHTML(p.display_name) + '</span>' + badges + '</span>' +
@@ -1718,15 +2120,36 @@
     });
   }
 
+  function refreshBalance(announce) {
+    return api("/api/balance").then(function (r) {
+      if (!r || !r.supported || !r.balance) {
+        if (el.sbBalance) { el.sbBalance.textContent = ""; }
+        if (announce) { addInfo((r && r.note) || "Balance checking is not supported for this provider."); }
+        return;
+      }
+      var b = r.balance;
+      if (el.sbBalance) { el.sbBalance.textContent = "Bal " + (r.compact || ""); }
+      if (announce) {
+        var msg = "Balance (" + b.provider + "): " + (r.compact || "");
+        if (b.total > 0) { msg += " · used " + b.used.toFixed(2) + " / " + b.total.toFixed(2) + " " + (b.currency || "USD"); }
+        if (b.note) { msg += " · " + b.note; }
+        addInfo(msg);
+      }
+    }).catch(function (err) {
+      if (announce) { addError("Balance check failed: " + err.message); }
+    });
+  }
+
   function openProviderConnectModal(p) {
     var html = stepperHTML(2, p.display_name);
     if (p.local) {
-      html += '<div class="sb-dim">Local server — no API key needed. Next you will pick a model.</div>' +
+      html += '<div class="sb-dim">Local server — no API key needed. Prompts stay on your machine.</div>' +
         '<div class="modal-field"><label>Base URL</label><input class="modal-input" id="provBaseURL" type="text" value="' + escapeHTML(p.base_url) + '"></div>';
     } else {
       var ph = p.has_key ? "Key already saved — leave empty to keep, or paste a new key" : ("Paste your " + p.display_name + " API key");
-      html += '<div class="sb-dim">Endpoint: ' + escapeHTML(p.base_url) + (p.env_var ? ' (' + escapeHTML(p.env_var) + ')' : '') + '</div>' +
-        '<div class="modal-field"><label>' + escapeHTML(p.display_name) + ' API Key</label><input class="modal-input" id="provAPIKey" type="text" autocomplete="off" spellcheck="false" placeholder="' + escapeHTML(ph) + '"></div>';
+      html += '<div class="sb-dim">Endpoint: ' + escapeHTML(p.base_url) + (p.env_var ? ' (' + escapeHTML(p.env_var) + ')' : '') + '</div>';
+      if (p.data_notice) { html += '<div class="modal-err">' + escapeHTML(p.data_notice) + '</div>'; }
+      html += '<div class="modal-field"><label>' + escapeHTML(p.display_name) + ' API Key</label><input class="modal-input" id="provAPIKey" type="text" autocomplete="off" spellcheck="false" placeholder="' + escapeHTML(ph) + '"></div>';
     }
     html += '<div class="modal-err" id="provErr"></div>';
     var foot = '<button class="chip-btn" id="provBack" type="button">← Back</button>' +
@@ -1748,6 +2171,7 @@
       api("/api/provider", { method: "POST", body: payload })
         .then(function (st) {
           applyStatus(st);
+          refreshBalance(false);
           openModelModal(false, true);
         })
         .catch(function (err) { errEl.textContent = err.message; });
@@ -1889,6 +2313,9 @@
       case "providers":
         openProviderModal();
         return true;
+      case "balance":
+        refreshBalance(true);
+        return true;
       case "model":
         if (!arg) { openModelModal(false, false); }
         else if (arg.toLowerCase() === "free") { openModelModal(true, false); }
@@ -1947,19 +2374,61 @@
         }).catch(function (err) { addError(err.message); });
         return true;
       case "skills":
+        openModal("Skills", '<div class="sb-dim">Loading skills…</div>', "");
         api("/api/skills").then(function (r) {
           var s = r.skills || [];
-          if (!s.length) { addInfo("No skills discovered."); return; }
-          addInfo("Skills (" + s.length + "):\n" + s.map(function (x) { return "  • " + x.Name + (x.Description ? " — " + x.Description : ""); }).join("\n"));
-        }).catch(function (err) { addError(err.message); });
+          if (!s.length) { openModal("Skills", '<div class="sb-dim">No skills discovered (.claude/skills, .agents/skills, .tern/skills).</div>', ""); return; }
+          var html = '<div class="modal-list">' + s.map(function (x) {
+            return '<div class="modal-row"><span class="modal-row-main"><span class="modal-row-name">' + escapeHTML(x.Name) + '</span></span><span class="modal-row-meta">' + escapeHTML(x.Description || x.Scope || "") + '</span></div>';
+          }).join("") + '</div>';
+          openModal("Skills (" + s.length + ")", html, "Install more with: tern skill install <url>");
+        }).catch(function (err) { openModal("Skills", '<div class="modal-err">' + escapeHTML(err.message) + '</div>', ""); });
         return true;
       case "plugins":
       case "ext":
+        openModal("Plugins", '<div class="sb-dim">Loading plugins…</div>', "");
         api("/api/plugins").then(function (r) {
           var p = r.plugins || [];
-          if (!p.length) { addInfo("No plugins installed."); return; }
-          addInfo("Plugins (" + p.length + "):\n" + p.map(function (x) { return "  • " + x.name + (x.description ? " — " + x.description : ""); }).join("\n"));
-        }).catch(function (err) { addError(err.message); });
+          if (!p.length) { openModal("Plugins", '<div class="sb-dim">No plugins installed. Create one with: tern plugin new &lt;name&gt;</div>', ""); return; }
+          var html = '<div class="modal-list">' + p.map(function (x) {
+            return '<div class="modal-row"><span class="modal-row-main"><span class="modal-row-name">' + escapeHTML(x.name) + '</span>' +
+              '<span class="badge">' + (x.enabled ? "enabled" : "disabled") + '</span></span><span class="modal-row-meta">' + escapeHTML(x.description || "") + '</span></div>';
+          }).join("") + '</div>';
+          openModal("Plugins (" + p.length + ")", html, "Manage via: tern plugin list|new|install|remove");
+        }).catch(function (err) { openModal("Plugins", '<div class="modal-err">' + escapeHTML(err.message) + '</div>', ""); });
+        return true;
+      case "sessions":
+        openModal("Sessions", '<div class="sb-dim">Loading sessions…</div>', "");
+        api("/api/sessions").then(function (r) {
+          var list = r.sessions || [];
+          if (!list.length) { openModal("Sessions", '<div class="sb-dim">No saved sessions yet.</div>', ""); return; }
+          var body = '<div class="modal-list" id="sessList"></div>';
+          openModal("Sessions (" + list.length + ")", body, "Current: " + (r.current || "none"));
+          var box = document.getElementById("sessList");
+          list.slice(0, 50).forEach(function (s) {
+            var row = document.createElement("div");
+            row.className = "modal-row" + (s.id === r.current ? " active" : "");
+            row.innerHTML = '<span class="modal-row-main"><span class="modal-row-name">' + escapeHTML(s.name || s.id) + '</span>' +
+              (s.id === r.current ? '<span class="badge badge-saved">current</span>' : '') + '</span>' +
+              '<span class="modal-row-meta">' + escapeHTML((s.model || "") + (s.cost_usd ? (" · $" + s.cost_usd.toFixed(3)) : "")) + '</span>';
+            box.appendChild(row);
+          });
+        }).catch(function (err) { openModal("Sessions", '<div class="modal-err">' + escapeHTML(err.message) + '</div>', ""); });
+        return true;
+      case "name":
+        if (!arg) { addError("Usage: /name <session title>"); return true; }
+        api("/api/sessions/rename", { method: "POST", body: { name: arg } })
+          .then(function () { addInfo("Session renamed to \"" + arg + "\"."); })
+          .catch(function (err) { addError(err.message); });
+        return true;
+      case "theme":
+        var thArg = arg.toLowerCase();
+        if (thArg === "light") { document.body.classList.add("theme-light"); addInfo("Theme set to light."); }
+        else if (thArg === "dark") { document.body.classList.remove("theme-light"); addInfo("Theme set to dark."); }
+        else {
+          var isLight = document.body.classList.toggle("theme-light");
+          addInfo("Theme set to " + (isLight ? "light" : "dark") + ".");
+        }
         return true;
       case "undo":
         api("/api/undo", { method: "POST" }).then(function (r) {
@@ -1997,19 +2466,23 @@
 
   function send() {
     var text = el.input.value.trim();
-    if (!text) { return; }
+    var imgs = state.attachments.map(function (a) { return a.dataUrl; });
+    if (!text && !imgs.length) { return; }
     el.input.value = "";
+    state.attachments = [];
+    renderAttachments();
     autosize();
     clearSlashMenu(false);
 
-    if (text.startsWith("/") && handleSlashCommand(text)) {
+    if (text.startsWith("/") && !imgs.length && handleSlashCommand(text)) {
       el.input.focus();
       return;
     }
 
     var steer = state.running;
-    var userNode = steer ? null : addUser(text, false);
-    api("/api/prompt", { method: "POST", body: { text: text } })
+    var display = text + (imgs.length ? (" [+" + imgs.length + " image(s)]") : "");
+    var userNode = steer ? null : addUser(display, false);
+    api("/api/prompt", { method: "POST", body: { text: text, images: imgs } })
       .then(function (res) {
         if (res.steered) {
           if (userNode) { userNode.classList.add("steer"); }

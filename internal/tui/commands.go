@@ -23,6 +23,7 @@ import (
 // and /help.
 var builtinCommandNames = []string{
 	"agents",
+	"balance",
 	"changelog",
 	"clear",
 	"compact",
@@ -59,6 +60,7 @@ var builtinCommandNames = []string{
 
 var builtinCommandDescriptions = map[string]string{
 	"agents":    "Inspect sub-agents",
+	"balance":   "Check remaining provider credit balance",
 	"changelog": "Show what's new in tern",
 	"clear":     "Clear transcript view",
 	"compact":  "Compact conversation context",
@@ -113,6 +115,9 @@ func (m *Model) handleSlash(line string, attachments []provider.ContentPart) tea
 	case "provider", "providers":
 		m.openProviderModal(false)
 		return nil
+
+	case "balance":
+		return m.fetchBalanceCmd(true)
 
 	case "effort", "thinking":
 		return m.cmdEffort(args)

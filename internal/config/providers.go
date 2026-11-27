@@ -10,6 +10,8 @@ type ProviderPreset struct {
 	EnvVar       string
 	DefaultModel string
 	RequiresKey  bool
+	FreeTier     bool
+	DataNotice   string
 	ExtraHeaders map[string]string
 }
 
@@ -33,10 +35,32 @@ func BuiltinProviders() []ProviderPreset {
 			EnvVar:       "OPENROUTER_API_KEY",
 			DefaultModel: "anthropic/claude-sonnet-4",
 			RequiresKey:  true,
+			FreeTier:     true,
+			DataNotice:   "Note: OpenRouter :free models may log prompts/outputs for provider training unless disabled in OpenRouter privacy settings.",
 			ExtraHeaders: map[string]string{
 				"HTTP-Referer": "https://tern.disgusting.work",
 				"X-Title":      "tern",
 			},
+		},
+		{
+			Name:         "gemini",
+			DisplayName:  "Google Gemini (Free Tier)",
+			BaseURL:      "https://generativelanguage.googleapis.com/v1beta/openai",
+			EnvVar:       "GEMINI_API_KEY",
+			DefaultModel: "gemini-2.5-flash",
+			RequiresKey:  true,
+			FreeTier:     true,
+			DataNotice:   "⚠ Free tier (no credit card, via aistudio.google.com): prompts may be used by Google to improve products — do not send secrets or proprietary code.",
+		},
+		{
+			Name:         "groq",
+			DisplayName:  "Groq (Free Tier)",
+			BaseURL:      "https://api.groq.com/openai/v1",
+			EnvVar:       "GROQ_API_KEY",
+			DefaultModel: "llama-3.3-70b-versatile",
+			RequiresKey:  true,
+			FreeTier:     true,
+			DataNotice:   "Free tier available (no credit card, via console.groq.com) with ultra-fast inference and per-minute rate limits.",
 		},
 		{
 			Name:         "openai",
@@ -44,14 +68,6 @@ func BuiltinProviders() []ProviderPreset {
 			BaseURL:      "https://api.openai.com/v1",
 			EnvVar:       "OPENAI_API_KEY",
 			DefaultModel: "gpt-4.1",
-			RequiresKey:  true,
-		},
-		{
-			Name:         "groq",
-			DisplayName:  "Groq",
-			BaseURL:      "https://api.groq.com/openai/v1",
-			EnvVar:       "GROQ_API_KEY",
-			DefaultModel: "llama-3.3-70b-versatile",
 			RequiresKey:  true,
 		},
 		{
@@ -85,6 +101,7 @@ func BuiltinProviders() []ProviderPreset {
 			EnvVar:       "",
 			DefaultModel: "qwen2.5-coder:14b",
 			RequiresKey:  false,
+			DataNotice:   "Local only — prompts stay on your machine.",
 		},
 		{
 			Name:         "lmstudio",
@@ -93,6 +110,7 @@ func BuiltinProviders() []ProviderPreset {
 			EnvVar:       "",
 			DefaultModel: "local-model",
 			RequiresKey:  false,
+			DataNotice:   "Local only — prompts stay on your machine.",
 		},
 	}
 
@@ -130,6 +148,8 @@ func InferProviderFromBaseURL(baseURL string) string {
 	lower := strings.ToLower(trimmed)
 
 	switch {
+	case strings.Contains(lower, "generativelanguage.googleapis.com"):
+		return "gemini"
 	case strings.Contains(lower, "openrouter.ai"):
 		return "openrouter"
 	case strings.Contains(lower, "api.openai.com"):

@@ -238,6 +238,7 @@ type Model struct {
 	// Non-blocking release update status populated by Init or /version.
 	updateAvailable string
 	updateChecked   bool
+	balance         *provider.BalanceInfo
 
 	// historyPath is the persisted terminal-style chatbar history. It stays
 	// empty when no config dir was supplied so tests and embedded use never
@@ -301,6 +302,12 @@ type modelsLoadedMsg struct {
 	err      error
 }
 
+type balanceLoadedMsg struct {
+	info     *provider.BalanceInfo
+	err      error
+	announce bool
+}
+
 type slashItem struct {
 	name string
 	desc string
@@ -331,10 +338,38 @@ func (m *Model) Init() tea.Cmd {
 			return updateCheckMsg{latest: latest, available: available}
 		})
 	}
+	if !m.needsSetup {
+		if balCmd := m.fetchBalanceCmd(false); balCmd != nil {
+			cmds = append(cmds, balCmd)
+		}
+	}
 	if len(cmds) == 1 {
 		return cmds[0]
 	}
 	return tea.Batch(cmds...)
+}
+
+func (m *Model) fetchBalanceCmd(announce bool) tea.Cmd {
+	if m.opts.Agent == nil || m.opts.Agent.Provider == nil {
+		return nil
+	}
+	checker, ok := m.opts.Agent.Provider.(provider.BalanceChecker)
+	if !ok {
+		if announce {
+			m.addInfo("Balance checking is not supported for the active provider.")
+		}
+		return nil
+	}
+	baseCtx := m.baseCtx
+	if baseCtx == nil {
+		baseCtx = context.Background()
+	}
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(baseCtx, 10*time.Second)
+		defer cancel()
+		info, err := checker.GetBalance(ctx)
+		return balanceLoadedMsg{info: info, err: err, announce: announce}
+	}
 }
 
 // Update handles one message. It never performs blocking agent work on the
@@ -363,6 +398,35 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case modelsLoadedMsg:
 		m.handleModelsLoaded(msg)
+		return m, nil
+
+	case balanceLoadedMsg:
+		if msg.err != nil {
+			if msg.announce {
+				if errors.Is(msg.err, provider.ErrBalanceUnsupported) {
+					m.addInfo("Balance checking is not supported for this provider.")
+				} else {
+					m.addError("Balance check failed: " + msg.err.Error())
+				}
+			}
+			return m, nil
+		}
+		if msg.info != nil {
+			m.balance = msg.info
+			m.dirty = true
+			if msg.announce {
+				detail := fmt.Sprintf("Balance (%s): %s", msg.info.Provider, msg.info.FormatCompact())
+				if msg.info.Total > 0 {
+					detail += fmt.Sprintf(" (used %.2f / %.2f %s)", msg.info.Used, msg.info.Total, msg.info.Currency)
+				} else if msg.info.Granted > 0 || msg.info.ToppedUp > 0 {
+					detail += fmt.Sprintf(" (granted %.2f · topped up %.2f %s)", msg.info.Granted, msg.info.ToppedUp, msg.info.Currency)
+				}
+				if msg.info.Note != "" {
+					detail += " · " + msg.info.Note
+				}
+				m.addInfo(detail)
+			}
+		}
 		return m, nil
 
 	case tea.WindowSizeMsg:

@@ -24,7 +24,9 @@ type providerOption struct {
 	defaultModel string
 	envVar       string
 	note         string
+	dataNotice   string
 	recommended  bool
+	freeTier     bool
 	local        bool
 	custom       bool
 	hasSavedKey  bool
@@ -74,19 +76,20 @@ func (m *Model) buildProviderOptions() []providerOption {
 	opts := make([]providerOption, 0, len(presets)+1)
 	notes := map[string]string{
 		"deepseek":   "fast, affordable, prompt caching",
-		"openrouter": "300+ models (Claude, GPT, Gemini, DeepSeek, free tier)",
+		"openrouter": "300+ models (Claude, GPT, Gemini, DeepSeek, :free tier)",
+		"gemini":     "1M context · free tier (no credit card · logs data)",
+		"groq":       "ultra-fast inference · free tier (no credit card)",
 		"openai":     "GPT-4.1, o3, o4-mini",
-		"groq":       "ultra-fast inference",
 		"xai":        "Grok models",
 		"mistral":    "Mistral & Codestral",
 		"together":   "open-weight hosted models",
-		"ollama":     "local models · no key needed",
-		"lmstudio":   "local models · no key needed",
+		"ollama":     "local models · private · no key",
+		"lmstudio":   "local models · private · no key",
 	}
 	for _, p := range presets {
-		local := p.EnvVar == ""
+		local := !p.RequiresKey
 		hasKey := false
-		if !local && m.opts.GlobalConfigDir != "" {
+		if p.RequiresKey && m.opts.GlobalConfigDir != "" {
 			if k, err := config.LoadAPIKeyForProvider(m.opts.GlobalConfigDir, p.Name); err == nil && strings.TrimSpace(k) != "" {
 				hasKey = true
 			}
@@ -98,7 +101,9 @@ func (m *Model) buildProviderOptions() []providerOption {
 			defaultModel: p.DefaultModel,
 			envVar:       p.EnvVar,
 			note:         notes[p.Name],
+			dataNotice:   p.DataNotice,
 			recommended:  p.Name == "deepseek",
+			freeTier:     p.FreeTier,
 			local:        local,
 			hasSavedKey:  hasKey,
 		})
@@ -251,7 +256,7 @@ func (m *Model) handleProviderConfigureKey(msg tea.KeyMsg) tea.Cmd {
 	fieldCount := m.providerFieldCount(opt)
 	buf := m.activeProviderFieldBuf(opt, ps)
 
-	if msg.Paste && msg.Type == tea.KeyRunes {
+	if msg.Paste && msg.Type == tea.KeyRunes && buf != nil {
 		cleaned := cleanSetupInput(string(msg.Runes), opt, ps.fieldIdx)
 		if cleaned != "" {
 			*buf = append(*buf, []rune(cleaned)...)
@@ -280,30 +285,34 @@ func (m *Model) handleProviderConfigureKey(msg tea.KeyMsg) tea.Cmd {
 		}
 		return nil
 	case tea.KeyBackspace:
-		if len(*buf) > 0 {
+		if buf != nil && len(*buf) > 0 {
 			*buf = (*buf)[:len(*buf)-1]
 			ps.errMsg = ""
 			m.dirty = true
 		}
 		return nil
 	case tea.KeyCtrlU:
-		*buf = nil
-		ps.errMsg = ""
-		m.dirty = true
+		if buf != nil {
+			*buf = nil
+			ps.errMsg = ""
+			m.dirty = true
+		}
 		return nil
 	case tea.KeySpace:
-		if !isAPIKeyField(opt, ps.fieldIdx) {
+		if buf != nil && !isAPIKeyField(opt, ps.fieldIdx) {
 			*buf = append(*buf, ' ')
 			ps.errMsg = ""
 			m.dirty = true
 		}
 		return nil
 	case tea.KeyRunes:
-		cleaned := cleanSetupInput(string(msg.Runes), opt, ps.fieldIdx)
-		if cleaned != "" {
-			*buf = append(*buf, []rune(cleaned)...)
-			ps.errMsg = ""
-			m.dirty = true
+		if buf != nil {
+			cleaned := cleanSetupInput(string(msg.Runes), opt, ps.fieldIdx)
+			if cleaned != "" {
+				*buf = append(*buf, []rune(cleaned)...)
+				ps.errMsg = ""
+				m.dirty = true
+			}
 		}
 		return nil
 	case tea.KeyEnter:
@@ -390,13 +399,21 @@ func (m *Model) commitProviderSetup(opt providerOption, ps *providerSetupState) 
 	m.needsSetup = false
 	m.cachedModelsKey = ""
 	m.cachedModels = nil
+	m.balance = nil
 	m.ctxWindow = defaultContextWindow(m.opts)
 
 	// Step 3 of 3: seamlessly open the live model picker for this provider.
 	cmd := m.openModelModalWithFilter(false)
 	m.modal.fromProviderSetup = true
 	m.statusMsg = fmt.Sprintf("Step 3 of 3 · Choose a model from %s", opt.displayName)
-	return cmd
+	balCmd := m.fetchBalanceCmd(false)
+	if cmd != nil && balCmd != nil {
+		return tea.Batch(cmd, balCmd)
+	}
+	if cmd != nil {
+		return cmd
+	}
+	return balCmd
 }
 
 func (m *Model) renderSetupStepper(step int, providerLabel string) string {
@@ -482,8 +499,12 @@ func (m *Model) providerSelectView(ps *providerSetupState) string {
 			} else {
 				badge = m.st.paint(m.st.accent, "★ recommended")
 			}
+		case opt.freeTier && opt.hasSavedKey:
+			badge = m.st.paint(m.st.success, "free tier · saved")
+		case opt.freeTier:
+			badge = m.st.paint(m.st.success, "free tier")
 		case opt.local:
-			badge = m.st.paint(m.st.info, "local · no key")
+			badge = m.st.paint(m.st.info, "local · private")
 		case opt.hasSavedKey:
 			badge = m.st.paint(m.st.success, "key saved")
 		}
@@ -526,7 +547,7 @@ func (m *Model) providerConfigureView(ps *providerSetupState) string {
 	lines = append(lines, "")
 
 	if opt.local {
-		lines = append(lines, m.st.paint(m.st.dim, "Local server — no API key needed. Press Enter to browse available models."))
+		lines = append(lines, m.st.paint(m.st.dim, "Local server — no API key needed. Prompts stay on your machine."))
 	} else if opt.custom {
 		lines = append(lines, m.st.paint(m.st.dim, "Connect to any OpenAI-compatible /v1 endpoint."))
 	} else {
@@ -536,6 +557,12 @@ func (m *Model) providerConfigureView(ps *providerSetupState) string {
 		}
 		lines = append(lines, m.st.paint(m.st.dim, hint))
 		lines = append(lines, m.st.paint(m.st.dim, "Saved to ~/.config/tern/credentials.toml (0600). Next you'll pick a model."))
+		if opt.dataNotice != "" {
+			lines = append(lines, "")
+			for _, wline := range strings.Split(wrapPlainCell(opt.dataNotice, boxInner), "\n") {
+				lines = append(lines, m.st.paint(m.st.warn, wline))
+			}
+		}
 	}
 	lines = append(lines, "")
 

@@ -103,6 +103,8 @@ func runWithOptions(o runOptions) int {
 			return runDoctorCommand(o.Args[1:], o)
 		case "providers", "provider":
 			return runProvidersCommand(o.Args[1:], o)
+		case "balance":
+			return runBalanceCommand(o.Args[1:], o.Out, o.Err)
 		case "plugin", "plugins":
 			return runPluginCommand(o.Args[1:], o)
 		case "skill", "skills":
@@ -193,8 +195,10 @@ func runWithOptions(o runOptions) int {
 	interactiveTUI := !promptMode && !opts.RPC && !opts.JSON
 	needsSetup := false
 	if strings.TrimSpace(cfg.APIKey) == "" {
-		if isLoopbackBaseURL(cfg.BaseURL) {
-			cfg.APIKey = "local"
+		if providerNeedsNoKey(cfg) {
+			if isLoopbackBaseURL(cfg.BaseURL) {
+				cfg.APIKey = "local"
+			}
 		} else if interactiveTUI && o.Provider == nil {
 			needsSetup = true
 		} else {
@@ -221,8 +225,8 @@ func runWithOptions(o runOptions) int {
 	prov := o.Provider
 	if prov == nil {
 		client := newProviderClient(cfg)
-		if cfg.DebugCache {
-			client.DebugCacheLogger = func(msg string) {
+		if ds, ok := client.(*provider.DeepSeekClient); ok && cfg.DebugCache {
+			ds.DebugCacheLogger = func(msg string) {
 				fmt.Fprintf(o.Err, "[cache] %s\n", msg)
 			}
 		}
@@ -307,8 +311,8 @@ func runWithOptions(o runOptions) int {
 			cfg.APIKey = apiKey
 
 			client := newProviderClient(cfg)
-			if cfg.DebugCache {
-				client.DebugCacheLogger = func(msg string) {
+			if ds, ok := client.(*provider.DeepSeekClient); ok && cfg.DebugCache {
+				ds.DebugCacheLogger = func(msg string) {
 					fmt.Fprintf(o.Err, "[cache] %s\n", msg)
 				}
 			}

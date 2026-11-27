@@ -1,6 +1,7 @@
 package provider
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -34,7 +35,13 @@ func (c *DeepSeekClient) modelsEndpoint() string {
 	if base == "" {
 		base = defaultDeepSeekBaseURL
 	}
-	return strings.TrimRight(base, "/") + "/models"
+	trimmed := strings.TrimRight(base, "/")
+	if strings.Contains(strings.ToLower(trimmed), "pollinations.ai") {
+		if idx := strings.Index(strings.ToLower(trimmed), "/openai"); idx > 0 {
+			return trimmed[:idx] + "/models"
+		}
+	}
+	return trimmed + "/models"
 }
 
 // sanitizeHeaderToken strips whitespace, control characters, ANSI escape
@@ -104,6 +111,40 @@ func (c *DeepSeekClient) ListModels(ctx context.Context) ([]RemoteModel, error) 
 			StatusCode: resp.StatusCode,
 			Message:    strings.TrimSpace(string(body)),
 		}
+	}
+
+	// Pollinations /models returns a bare JSON array of {name, description, vision}.
+	if trimmedBody := bytes.TrimSpace(body); len(trimmedBody) > 0 && trimmedBody[0] == '[' {
+		var arr []struct {
+			Name        string `json:"name"`
+			Description string `json:"description"`
+			Vision      bool   `json:"vision"`
+		}
+		if err := json.Unmarshal(trimmedBody, &arr); err != nil {
+			return nil, fmt.Errorf("provider: decode models array: %w", err)
+		}
+		models := make([]RemoteModel, 0, len(arr))
+		seen := make(map[string]struct{}, len(arr))
+		for _, item := range arr {
+			id := strings.TrimSpace(item.Name)
+			if id == "" {
+				continue
+			}
+			if _, dup := seen[id]; dup {
+				continue
+			}
+			seen[id] = struct{}{}
+			caps := DefaultModelCapabilities(id)
+			models = append(models, RemoteModel{
+				ID:             id,
+				Name:           strings.TrimSpace(item.Description),
+				ContextLength:  caps.ContextWindow,
+				HasPricing:     true,
+				IsFree:         true,
+				SupportsVision: item.Vision || caps.SupportsVision,
+			})
+		}
+		return models, nil
 	}
 
 	var payload struct {
@@ -207,6 +248,12 @@ func parseFlexibleFloat(raw json.RawMessage) (float64, bool) {
 // provider preset before or if GET /models is unavailable.
 func FallbackModelsForProvider(providerName string) []RemoteModel {
 	switch strings.ToLower(strings.TrimSpace(providerName)) {
+	case "gemini":
+		return []RemoteModel{
+			{ID: "gemini-2.5-flash", Name: "Gemini 2.5 Flash (free tier)", ContextLength: 1_048_576, HasPricing: true, IsFree: true, SupportsVision: true},
+			{ID: "gemini-2.5-pro", Name: "Gemini 2.5 Pro (free tier)", ContextLength: 1_048_576, HasPricing: true, IsFree: true, SupportsVision: true},
+			{ID: "gemini-2.5-flash-lite", Name: "Gemini 2.5 Flash-Lite (free tier)", ContextLength: 1_048_576, HasPricing: true, IsFree: true, SupportsVision: true},
+		}
 	case "openrouter":
 		return []RemoteModel{
 			{ID: "deepseek/deepseek-r1:free", ContextLength: 163_840, HasPricing: true, IsFree: true},

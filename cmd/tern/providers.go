@@ -19,6 +19,7 @@ type providerStatusRow struct {
 	EnvVar       string `json:"env_var,omitempty"`
 	DefaultModel string `json:"default_model"`
 	KeyStatus    string `json:"key_status"`
+	DataNotice   string `json:"data_notice,omitempty"`
 }
 
 func runProvidersCommand(args []string, o runOptions) int {
@@ -46,9 +47,10 @@ func runProvidersCommand(args []string, o runOptions) int {
 	rows := make([]providerStatusRow, 0, len(presets))
 	for _, p := range presets {
 		status := "[not set]"
-		if !p.RequiresKey {
+		switch {
+		case !p.RequiresKey:
 			status = "[local]"
-		} else if configDir != "" {
+		case configDir != "":
 			if key, err := config.LoadAPIKeyForProvider(configDir, p.Name); err == nil && strings.TrimSpace(key) != "" {
 				status = "[set]"
 			}
@@ -60,6 +62,7 @@ func runProvidersCommand(args []string, o runOptions) int {
 			EnvVar:       p.EnvVar,
 			DefaultModel: p.DefaultModel,
 			KeyStatus:    status,
+			DataNotice:   p.DataNotice,
 		})
 	}
 
@@ -80,6 +83,7 @@ func runProvidersCommand(args []string, o runOptions) int {
 		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\n", r.Name, r.KeyStatus, env, r.DefaultModel, r.BaseURL)
 	}
 	_ = tw.Flush()
-	fmt.Fprintln(o.Out, "\nUse any provider with: tern --provider openrouter --model anthropic/claude-sonnet-4")
+	fmt.Fprintln(o.Out, "\nNote: Free tiers (Google Gemini AI Studio, OpenRouter ':free' models) may log prompts/outputs for provider training — do not send secrets or private code.")
+	fmt.Fprintln(o.Out, "Check remaining balance: tern balance   |   Switch provider: tern --provider <name>")
 	return 0
 }

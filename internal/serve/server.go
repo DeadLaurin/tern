@@ -25,7 +25,9 @@ import (
 	"github.com/tern-agent/tern/internal/permission"
 	"github.com/tern-agent/tern/internal/provider"
 	"github.com/tern-agent/tern/internal/session"
+	"github.com/tern-agent/tern/internal/subagent"
 	"github.com/tern-agent/tern/internal/theme"
+	"github.com/tern-agent/tern/internal/tools"
 )
 
 //go:embed ui.html
@@ -47,6 +49,8 @@ type Options struct {
 	// permission.Manager type in this codebase.)
 	Permissions         *permission.Evaluator
 	Checkpoints         *checkpoint.Store
+	Subagents           *subagent.Manager
+	Todos               *tools.TodoStore
 	OnConfigureProvider func(providerName, baseURL, apiKey, model string) error
 	Version             string
 	WorkDir             string
@@ -66,6 +70,8 @@ type Server struct {
 	Config              *config.Config
 	Permissions         *permission.Evaluator
 	Checkpoints         *checkpoint.Store
+	Subagents           *subagent.Manager
+	Todos               *tools.TodoStore
 	OnConfigureProvider func(providerName, baseURL, apiKey, model string) error
 	Version             string
 	WorkDir             string
@@ -88,9 +94,24 @@ type Server struct {
 	contextTokens int
 	tokensPerSec  float64
 	startedAt     time.Time
-	clients       map[chan sseFrame]struct{}
-	approvals     map[string]*pendingApproval
-	pending       *approvalWire
+	clients         map[chan sseFrame]struct{}
+	approvals       map[string]*pendingApproval
+	pending         *approvalWire
+	turnAutoApprove bool
+	sessionAllowAll bool
+	asks            map[string]*pendingAsk
+	pendingAsk      *askWire
+}
+
+type askWire struct {
+	ID       string   `json:"id"`
+	Question string   `json:"question"`
+	Options  []string `json:"options,omitempty"`
+}
+
+type pendingAsk struct {
+	wire askWire
+	ch   chan string
 }
 
 // sseFrame is one Server-Sent Event ready for the wire.
@@ -139,6 +160,8 @@ func New(opts Options) *Server {
 		Config:              opts.Config,
 		Permissions:         opts.Permissions,
 		Checkpoints:         opts.Checkpoints,
+		Subagents:           opts.Subagents,
+		Todos:               opts.Todos,
 		OnConfigureProvider: opts.OnConfigureProvider,
 		Version:             opts.Version,
 		WorkDir:             opts.WorkDir,
@@ -152,6 +175,7 @@ func New(opts Options) *Server {
 		startedAt: time.Now(),
 		clients:   make(map[chan sseFrame]struct{}),
 		approvals: make(map[string]*pendingApproval),
+		asks:      make(map[string]*pendingAsk),
 	}
 
 	if s.Config == nil && s.Agent != nil {
@@ -185,6 +209,10 @@ func New(opts Options) *Server {
 		s.contextTokens = s.Agent.ContextTokens()
 		s.Agent.OnEvent = s.onEvent
 		s.Agent.OnApprove = s.onApprove
+		s.Agent.OnAskUser = s.onAskUser
+	}
+	if s.Subagents != nil {
+		s.Subagents.Approvals().SetApprover(s.onSubagentApprove)
 	}
 	return s
 }
@@ -217,16 +245,22 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/prompt", s.handlePrompt)
 	mux.HandleFunc("/api/cancel", s.handleCancel)
 	mux.HandleFunc("/api/approve", s.handleApprove)
+	mux.HandleFunc("/api/ask", s.handleAsk)
 	mux.HandleFunc("/api/model", s.handleModel)
 	mux.HandleFunc("/api/models", s.handleModels)
 	mux.HandleFunc("/api/providers", s.handleProviders)
 	mux.HandleFunc("/api/provider", s.handleSetProvider)
+	mux.HandleFunc("/api/balance", s.handleBalance)
 	mux.HandleFunc("/api/permission", s.handlePermission)
 	mux.HandleFunc("/api/compact", s.handleCompact)
 	mux.HandleFunc("/api/changelog", s.handleChangelog)
 	mux.HandleFunc("/api/config", s.handleConfig)
 	mux.HandleFunc("/api/skills", s.handleSkills)
 	mux.HandleFunc("/api/plugins", s.handlePlugins)
+	mux.HandleFunc("/api/sessions", s.handleSessions)
+	mux.HandleFunc("/api/sessions/rename", s.handleRenameSession)
+	mux.HandleFunc("/api/subagents/transcript", s.handleSubagentTranscript)
+	mux.HandleFunc("/api/subagents/cancel", s.handleSubagentCancel)
 	mux.HandleFunc("/api/undo", s.handleUndo)
 	return s.authMiddleware(mux)
 }
@@ -282,9 +316,13 @@ type statusResponse struct {
 	TotalCostUSD    float64        `json:"total_cost_usd"`
 	TokensPerSec    float64        `json:"tokens_per_sec"`
 	UptimeSec       int64          `json:"uptime_sec"`
-	Usage           provider.Usage `json:"usage"`
-	PendingApproval *approvalWire  `json:"pending_approval,omitempty"`
-	AuthEnabled     bool           `json:"auth_enabled"`
+	Usage           provider.Usage         `json:"usage"`
+	PendingApproval *approvalWire          `json:"pending_approval,omitempty"`
+	PendingAsk      *askWire               `json:"pending_ask,omitempty"`
+	SessionAllowAll bool                   `json:"session_allow_all,omitempty"`
+	Subagents       []subagent.AgentStatus `json:"subagents,omitempty"`
+	Todos           []tools.TodoItem       `json:"todos,omitempty"`
+	AuthEnabled     bool                   `json:"auth_enabled"`
 }
 
 func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
@@ -321,8 +359,20 @@ func (s *Server) status() statusResponse {
 		pending := *s.pending
 		resp.PendingApproval = &pending
 	}
+	if s.pendingAsk != nil {
+		ask := *s.pendingAsk
+		resp.PendingAsk = &ask
+	}
+	resp.SessionAllowAll = s.sessionAllowAll
 	model := s.model
 	s.mu.Unlock()
+
+	if s.Subagents != nil {
+		resp.Subagents = s.Subagents.List()
+	}
+	if s.Todos != nil {
+		resp.Todos = s.Todos.Items()
+	}
 
 	if s.Session != nil {
 		resp.SessionID = s.Session.ID()
@@ -565,7 +615,8 @@ func (s *Server) onEvent(ev agent.Event) {
 // ---------------------------------------------------------------------------
 
 type promptRequest struct {
-	Text string `json:"text"`
+	Text   string   `json:"text"`
+	Images []string `json:"images,omitempty"` // optional data:image/...;base64,... URLs
 }
 
 func (s *Server) handlePrompt(w http.ResponseWriter, r *http.Request) {
@@ -579,13 +630,25 @@ func (s *Server) handlePrompt(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	text := strings.TrimSpace(req.Text)
-	if text == "" {
+	if text == "" && len(req.Images) == 0 {
 		writeError(w, http.StatusBadRequest, "text is required")
 		return
 	}
 	if s.Agent == nil {
 		writeError(w, http.StatusServiceUnavailable, "agent is not available")
 		return
+	}
+
+	var attachments []provider.ContentPart
+	for _, imgURL := range req.Images {
+		imgURL = strings.TrimSpace(imgURL)
+		if imgURL == "" {
+			continue
+		}
+		attachments = append(attachments, provider.ContentPart{
+			Type:     "image_url",
+			ImageURL: &provider.ImageURL{URL: imgURL},
+		})
 	}
 
 	s.mu.Lock()
@@ -600,14 +663,16 @@ func (s *Server) handlePrompt(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := context.WithCancel(s.ctx)
 	s.running = true
+	s.turnAutoApprove = false
 	s.cancelTurn = cancel
 	s.mu.Unlock()
 
 	go func() {
 		defer cancel()
-		_, err := s.Agent.RunTurn(ctx, text, nil)
+		_, err := s.Agent.RunTurn(ctx, text, attachments)
 		s.mu.Lock()
 		s.running = false
+		s.turnAutoApprove = false
 		s.cancelTurn = nil
 		s.mu.Unlock()
 		if err != nil && !errors.Is(err, context.Canceled) {
@@ -644,6 +709,13 @@ func (s *Server) handleCancel(w http.ResponseWriter, r *http.Request) {
 // browser and blocks until the user answers, the turn is cancelled, or the
 // server shuts down.
 func (s *Server) onApprove(ctx context.Context, req agent.ApprovalRequest) (bool, error) {
+	s.mu.Lock()
+	if s.sessionAllowAll || s.turnAutoApprove {
+		s.mu.Unlock()
+		return true, nil
+	}
+	s.mu.Unlock()
+
 	wire := approvalWire{
 		ID:        newRequestID(),
 		ToolName:  req.ToolName,
@@ -659,6 +731,10 @@ func (s *Server) onApprove(ctx context.Context, req agent.ApprovalRequest) (bool
 	pending := &pendingApproval{wire: wire, ch: make(chan approvalDecision, 1)}
 
 	s.mu.Lock()
+	if s.sessionAllowAll || s.turnAutoApprove {
+		s.mu.Unlock()
+		return true, nil
+	}
 	s.approvals[wire.ID] = pending
 	s.pending = &wire
 	s.mu.Unlock()
@@ -704,25 +780,37 @@ func (s *Server) handleApprove(w http.ResponseWriter, r *http.Request) {
 	switch decision {
 	case "allow":
 		allow = true
+	case "allow_turn":
+		allow = true
 	case "allow_session":
-		// Session-wide approval is treated as a single allow for this call.
-		// The permission policy is immutable during a turn, so persisting a
-		// rule would require rebuilding the evaluator under the agent lock.
 		allow = true
 	case "deny":
 		allow = false
 	default:
-		writeError(w, http.StatusBadRequest, "decision must be allow, allow_session or deny")
+		writeError(w, http.StatusBadRequest, "decision must be allow, allow_turn, allow_session or deny")
 		return
 	}
 
 	s.mu.Lock()
+	if decision == "allow_turn" {
+		s.turnAutoApprove = true
+	} else if decision == "allow_session" {
+		s.sessionAllowAll = true
+	}
 	pending := s.approvals[strings.TrimSpace(req.ID)]
+	var alsoResolve []*pendingApproval
 	if pending != nil {
 		delete(s.approvals, pending.wire.ID)
 		if s.pending != nil && s.pending.ID == pending.wire.ID {
 			s.pending = nil
 		}
+	}
+	if decision == "allow_turn" || decision == "allow_session" {
+		for id, p := range s.approvals {
+			alsoResolve = append(alsoResolve, p)
+			delete(s.approvals, id)
+		}
+		s.pending = nil
 	}
 	s.mu.Unlock()
 	if pending == nil {
@@ -739,7 +827,83 @@ func (s *Server) handleApprove(w http.ResponseWriter, r *http.Request) {
 		"decision": decision,
 		"allow":    allow,
 	})
-	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "decision": decision})
+	for _, extra := range alsoResolve {
+		select {
+		case extra.ch <- approvalDecision{allow: true, decision: decision}:
+		default:
+		}
+		s.broadcast("approval_resolved", map[string]any{
+			"id":       extra.wire.ID,
+			"decision": decision,
+			"allow":    true,
+		})
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"ok":                true,
+		"decision":          decision,
+		"session_allow_all": decision == "allow_session",
+	})
+}
+
+// onSubagentApprove routes sub-agent tool approval requests through the same
+// browser approval card and turn/session auto-approval state as the main agent.
+func (s *Server) onSubagentApprove(ctx context.Context, req subagent.ApprovalRequest) (bool, error) {
+	label := req.ToolName
+	if req.AgentType != "" {
+		label = fmt.Sprintf("[%s:%s] %s", req.AgentType, req.AgentID, req.ToolName)
+	} else if req.AgentID != "" {
+		label = fmt.Sprintf("[sub-agent %s] %s", req.AgentID, req.ToolName)
+	}
+	reason := req.Reason
+	if req.TaskDescription != "" {
+		if reason != "" {
+			reason = req.TaskDescription + " — " + reason
+		} else {
+			reason = req.TaskDescription
+		}
+	}
+	return s.onApprove(ctx, agent.ApprovalRequest{
+		ToolName: label,
+		Command:  req.Detail,
+		Diff:     req.DiffPreview,
+		Reason:   reason,
+	})
+}
+
+// onAskUser publishes an interactive ask_user prompt to the browser and blocks
+// until the user answers or the turn is cancelled.
+func (s *Server) onAskUser(ctx context.Context, question string, options []string) (string, error) {
+	wire := askWire{
+		ID:       newRequestID(),
+		Question: question,
+		Options:  options,
+	}
+	pending := &pendingAsk{wire: wire, ch: make(chan string, 1)}
+
+	s.mu.Lock()
+	s.asks[wire.ID] = pending
+	s.pendingAsk = &wire
+	s.mu.Unlock()
+
+	s.broadcast("ask_user", wire)
+
+	defer func() {
+		s.mu.Lock()
+		delete(s.asks, wire.ID)
+		if s.pendingAsk != nil && s.pendingAsk.ID == wire.ID {
+			s.pendingAsk = nil
+		}
+		s.mu.Unlock()
+	}()
+
+	select {
+	case ans := <-pending.ch:
+		return ans, nil
+	case <-ctx.Done():
+		return "", ctx.Err()
+	case <-s.ctx.Done():
+		return "", s.ctx.Err()
+	}
 }
 
 // ---------------------------------------------------------------------------
@@ -872,6 +1036,9 @@ func (s *Server) handlePermission(w http.ResponseWriter, r *http.Request) {
 	}
 	if s.Config != nil {
 		s.Config.PermissionMode = mode.String()
+	}
+	if mode == permission.ModeAsk || mode == permission.ModePlan {
+		s.sessionAllowAll = false
 	}
 	s.mu.Unlock()
 	writeJSON(w, http.StatusOK, s.status())

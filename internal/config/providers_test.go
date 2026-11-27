@@ -26,9 +26,10 @@ func clearProviderEnv(t *testing.T) {
 func TestBuiltinProviders(t *testing.T) {
 	want := []ProviderPreset{
 		{Name: "deepseek", BaseURL: "https://api.deepseek.com", EnvVar: "DEEPSEEK_API_KEY", DefaultModel: "deepseek-flash", RequiresKey: true},
-		{Name: "openrouter", BaseURL: "https://openrouter.ai/api/v1", EnvVar: "OPENROUTER_API_KEY", DefaultModel: "anthropic/claude-sonnet-4", RequiresKey: true},
+		{Name: "openrouter", BaseURL: "https://openrouter.ai/api/v1", EnvVar: "OPENROUTER_API_KEY", DefaultModel: "anthropic/claude-sonnet-4", RequiresKey: true, FreeTier: true},
+		{Name: "gemini", BaseURL: "https://generativelanguage.googleapis.com/v1beta/openai", EnvVar: "GEMINI_API_KEY", DefaultModel: "gemini-2.5-flash", RequiresKey: true, FreeTier: true},
+		{Name: "groq", BaseURL: "https://api.groq.com/openai/v1", EnvVar: "GROQ_API_KEY", DefaultModel: "llama-3.3-70b-versatile", RequiresKey: true, FreeTier: true},
 		{Name: "openai", BaseURL: "https://api.openai.com/v1", EnvVar: "OPENAI_API_KEY", DefaultModel: "gpt-4.1", RequiresKey: true},
-		{Name: "groq", BaseURL: "https://api.groq.com/openai/v1", EnvVar: "GROQ_API_KEY", DefaultModel: "llama-3.3-70b-versatile", RequiresKey: true},
 		{Name: "xai", BaseURL: "https://api.x.ai/v1", EnvVar: "XAI_API_KEY", DefaultModel: "grok-3", RequiresKey: true},
 		{Name: "mistral", BaseURL: "https://api.mistral.ai/v1", EnvVar: "MISTRAL_API_KEY", DefaultModel: "mistral-large-latest", RequiresKey: true},
 		{Name: "together", BaseURL: "https://api.together.xyz/v1", EnvVar: "TOGETHER_API_KEY", DefaultModel: "meta-llama/Llama-3.3-70B-Instruct-Turbo", RequiresKey: true},
