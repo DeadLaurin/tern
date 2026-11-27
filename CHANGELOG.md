@@ -4,6 +4,11 @@ All notable changes to tern are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and tern adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v0.7.5] - 2026-11-28
+
+### Added
+- **Session preview & auto-derived friendly titles in TUI `/sessions`**: navigating sessions in the TUI `/sessions` modal now shows a live preview pane (title, model, message count, and latest snippet) for the highlighted session, displays friendly auto-derived titles from the first prompt on unnamed sessions, and includes preview text in live `/sessions` search filtering.
+
 ## [v0.7.4] - 2026-11-27
 
 ### Fixed
@@ -156,6 +161,7 @@ All notable changes to tern are documented here. The format is based on
 - `tern doctor` section headers render in order.
 - All `IsParallelSafe` tools, including task sub-agents, run concurrently.
 
+[v0.7.5]: https://github.com/DeadLaurin/tern/compare/v0.7.4...v0.7.5
 [v0.7.4]: https://github.com/DeadLaurin/tern/compare/v0.7.3...v0.7.4
 [v0.7.3]: https://github.com/DeadLaurin/tern/compare/v0.7.2...v0.7.3
 [v0.7.2]: https://github.com/DeadLaurin/tern/compare/v0.7.1...v0.7.2

@@ -56,6 +56,7 @@ type modalSession struct {
 	ID        string
 	Name      string
 	Model     string
+	Preview   string
 	Messages  int
 	Turns     int
 	Usage     provider.Usage
@@ -869,11 +870,26 @@ func (m *Model) refreshSessions() {
 	if store == nil {
 		return
 	}
+	summaryByID := make(map[string]session.SessionSummary)
+	list, listErr := store.List("")
+	if listErr == nil {
+		for _, item := range list {
+			summaryByID[item.ID] = item
+		}
+	}
 	stats, err := store.Stats()
 	if err == nil && stats != nil {
 		for _, row := range stats.Sessions {
+			name := row.Name
+			preview := ""
+			if sum, ok := summaryByID[row.ID]; ok {
+				if strings.TrimSpace(name) == "" {
+					name = sum.Name
+				}
+				preview = sum.Preview
+			}
 			m.modal.sessions = append(m.modal.sessions, modalSession{
-				ID: row.ID, Name: row.Name, Model: row.Model,
+				ID: row.ID, Name: name, Model: row.Model, Preview: preview,
 				Messages: row.Messages, Turns: row.Turns,
 				Usage: row.Usage, CostUSD: row.CostUSD,
 				Duration: row.Duration, UpdatedAt: row.UpdatedAt,
@@ -881,10 +897,10 @@ func (m *Model) refreshSessions() {
 		}
 	}
 	if len(m.modal.sessions) == 0 {
-		if list, listErr := store.List(""); listErr == nil {
+		if listErr == nil {
 			for _, item := range list {
 				m.modal.sessions = append(m.modal.sessions, modalSession{
-					ID: item.ID, Name: item.Name, Model: item.Model,
+					ID: item.ID, Name: item.Name, Model: item.Model, Preview: item.Preview,
 					Messages: item.MessageCount, Usage: item.Usage,
 					CostUSD: item.CostUSD, UpdatedAt: item.UpdatedAt,
 				})
@@ -906,7 +922,7 @@ func (m *Model) filteredSessions() []modalSession {
 	}
 	out := make([]modalSession, 0, len(m.modal.sessions))
 	for _, item := range m.modal.sessions {
-		haystack := strings.ToLower(item.ID + " " + item.Name + " " + item.Model)
+		haystack := strings.ToLower(item.ID + " " + item.Name + " " + item.Model + " " + item.Preview)
 		if strings.Contains(haystack, query) {
 			out = append(out, item)
 		}
@@ -1409,6 +1425,24 @@ func (m *Model) sessionsModalView() string {
 		}
 		if end < len(items) {
 			b.WriteString(m.st.paint(m.st.dim, fmt.Sprintf("  … %d below\n", len(items)-end)))
+		}
+		if sel := m.selectedSession(); sel != nil {
+			b.WriteString("\n")
+			previewW := maxInt(28, m.modalTextWidth()-4)
+			header := fmt.Sprintf("Preview · %s (%s · %d msgs)", sel.displayName(), sel.Model, sel.Messages)
+			b.WriteString(m.st.paint(m.st.accent, truncateCell(header, previewW)) + "\n")
+			previewText := strings.TrimSpace(sel.Preview)
+			if previewText == "" {
+				b.WriteString(m.st.paint(m.st.dim, "  (empty session)") + "\n")
+			} else {
+				wrapped := strings.Split(wrapPlainCell(previewText, previewW-2), "\n")
+				if len(wrapped) > 3 {
+					wrapped = append(wrapped[:2], truncateCell(wrapped[2], previewW-3)+"…")
+				}
+				for _, wl := range wrapped {
+					b.WriteString(m.st.paint(m.st.dim, "  "+wl) + "\n")
+				}
+			}
 		}
 	}
 	if m.modal.notice != "" {
