@@ -203,7 +203,7 @@
       <h1>tern</h1>
       <p class="tagline">A small, fast, minimalist terminal coding agent built for DeepSeek — also supporting OpenRouter, other cloud providers, local LLMs, and ACP agents.</p>
       <div class="meta">
-        <a href="https://github.com/DeadLaurin/tern/releases/latest" id="latestBadge" style="color:var(--sage);text-decoration:none;">v0.7.3</a>
+        <a href="https://github.com/DeadLaurin/tern/releases/latest" id="latestBadge" style="color:var(--sage);text-decoration:none;">v0.7.4</a>
         <span>·</span>
         <span>single static binary</span>
         <span>·</span>
@@ -241,30 +241,26 @@
           <p>Explore, research, review, or edit concurrently with per-path write locks and one-click thread peeking.</p>
         </div>
         <div class="card">
-          <h3>Prefix-cache first</h3>
-          <p>Append-only history, deterministic tool schemas, and proper DeepSeek V4 thinking passback keep cache hits high.</p>
+          <h3>DeepSeek-first, multi-provider</h3>
+          <p>Built for DeepSeek prefix caching &amp; multi-currency balance tracking, plus OpenRouter (with <code>:free</code> filter), Gemini, Groq, OpenAI, and local Ollama/LM Studio.</p>
         </div>
         <div class="card">
-          <h3>Steer &amp; queue</h3>
-          <p>Queue follow-ups while a turn runs, or press Ctrl+S to steer mid-flight without losing context.</p>
+          <h3>LAN Web UI &amp; ACP</h3>
+          <p>Run <code>tern serve</code> for a mobile-ready LAN web UI with clickable sub-agent tabs, or <code>tern acp</code> for ACP editor hosts.</p>
         </div>
         <div class="card">
-          <h3>Instant undo</h3>
-          <p>Shadow-copy file checkpoints before every edit turn — roll back with <code>/undo</code> or <code>tern undo</code>, no git required.</p>
-        </div>
-        <div class="card">
-          <h3>Extensible &amp; local</h3>
-          <p>Skills, hooks, MCP servers (stdio &amp; HTTP), folder extensions, plus <code>--local</code> for offline Ollama endpoints.</p>
+          <h3>Instant undo &amp; plugins</h3>
+          <p>Shadow-copy checkpoints (<code>/undo</code>), Claude &amp; Agent Skills (<code>tern skill</code>), plugins (<code>tern plugin</code>), MCP servers, and local CSS theming.</p>
         </div>
       </div>
     </section>
 
     <section class="section" id="changelog">
-      <h2>What's New <span id="clVer" style="color:var(--sage);font-family:var(--mono);font-size:0.85em;font-weight:500;">v0.7.3</span></h2>
+      <h2>What's New <span id="clVer" style="color:var(--sage);font-family:var(--mono);font-size:0.85em;font-weight:500;">v0.7.4</span></h2>
       <div id="clBody" class="card" style="padding:18px 20px;line-height:1.65;">
-        <p style="margin:0 0 8px;color:var(--text);"><strong>v0.7.3</strong> — Clickable <code>/sessions</code> with hover preview &amp; <code>Clear all</code> in <code>tern serve</code>, live <code>/steps [n]</code>, and automatic balance refresh.</p>
-        <p style="margin:0 0 8px;color:var(--muted);"><strong>v0.7.2</strong> — Auto-derived friendly session titles from first prompt &amp; <code>c clear all</code> in TUI <code>/sessions</code>.</p>
-        <p style="margin:0;color:var(--muted);"><strong>v0.7.1</strong> — Raised default max steps to 250, <code>/steps</code> command, soft-wrapping TUI textbar, and clickable sidebar model switcher.</p>
+        <p style="margin:0 0 8px;color:var(--text);"><strong>v0.7.4</strong> — Scrollable <code>/</code> slash-command autocomplete menu in <code>tern serve</code>.</p>
+        <p style="margin:0 0 8px;color:var(--muted);"><strong>v0.7.3</strong> — Clickable <code>/sessions</code> with hover preview &amp; <code>Clear all</code> in <code>tern serve</code>, live <code>/steps [n]</code>, and automatic balance refresh.</p>
+        <p style="margin:0;color:var(--muted);"><strong>v0.7.2</strong> — Auto-derived friendly session titles from first prompt &amp; <code>c clear all</code> in TUI <code>/sessions</code>.</p>
       </div>
       <p class="hint" style="margin-top:10px;"><a href="https://github.com/DeadLaurin/tern/blob/main/CHANGELOG.md">Read full CHANGELOG.md</a> · <a href="https://github.com/DeadLaurin/tern/releases">All GitHub Releases</a></p>
     </section>
