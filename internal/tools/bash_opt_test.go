@@ -3,6 +3,7 @@ package tools
 import (
 	"fmt"
 	"os"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -125,9 +126,13 @@ func TestBashForegroundNonInteractiveEnv(t *testing.T) {
 	tool := NewBashTool()
 	defer tool.Close()
 
+	cmd := fmt.Sprintf("printf '%%s|%%s|%%s|%%s|%%s\\n' \"$%s\" \"$%s\" \"$%s\" \"$%s\" \"$%s\"",
+		"GIT_TERMINAL_PROMPT", "PAGER", "GIT_PAGER", "CI", "DEBIAN_FRONTEND")
+	if runtime.GOOS == "windows" {
+		cmd = `Write-Output "$env:GIT_TERMINAL_PROMPT|$env:PAGER|$env:GIT_PAGER|$env:CI|$env:DEBIAN_FRONTEND"`
+	}
 	res, err := run(t, tool, env, map[string]any{
-		"command": fmt.Sprintf("printf '%%s|%%s|%%s|%%s|%%s\\n' \"$%s\" \"$%s\" \"$%s\" \"$%s\" \"$%s\"",
-			"GIT_TERMINAL_PROMPT", "PAGER", "GIT_PAGER", "CI", "DEBIAN_FRONTEND"),
+		"command": cmd,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -146,8 +151,12 @@ func TestBashBackgroundNonInteractiveEnv(t *testing.T) {
 	tool := NewBashTool()
 	defer tool.Close()
 
+	bgCmd := `echo "PAGER_IS_${PAGER}"`
+	if runtime.GOOS == "windows" {
+		bgCmd = `Write-Output "PAGER_IS_$env:PAGER"`
+	}
 	res, err := run(t, tool, env, map[string]any{
-		"command":    `echo "PAGER_IS_${PAGER}"`,
+		"command":    bgCmd,
 		"background": true,
 	})
 	if err != nil {
