@@ -790,6 +790,159 @@
   .changelog-body h2 { font-size: 1.05em; color: var(--accent); margin: 14px 0 6px; }
   .changelog-body h3 { font-size: 0.95em; color: var(--sage); margin: 10px 0 4px; }
   .changelog-body ul { margin: 4px 0 8px 18px; padding: 0; }
+
+  /* ---------- right sidebar: git / github / cloudflare ---------- */
+  .sb-head-btn {
+    color: var(--dim);
+    font-size: 0.95em;
+    padding: 0 4px;
+    border-radius: 3px;
+    margin-left: auto;
+    flex: none;
+  }
+  .sb-head-btn:hover { color: var(--text); }
+  .git-meta {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 6px;
+    font-size: 0.88em;
+    color: var(--muted);
+    margin-bottom: 6px;
+  }
+  .git-branch { color: var(--blue); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .git-ab { color: var(--dim); flex: none; }
+  .git-files {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    max-height: 190px;
+    overflow-y: auto;
+    margin-bottom: 8px;
+  }
+  .git-file {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 3px 4px;
+    border-radius: 4px;
+    font-size: 0.88em;
+    cursor: pointer;
+  }
+  .git-file:hover { background: var(--surface); }
+  .git-stage-btn {
+    width: 16px;
+    height: 16px;
+    flex: none;
+    border: 1px solid var(--border);
+    border-radius: 3px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 0.82em;
+    color: var(--dim);
+  }
+  .git-stage-btn.staged { border-color: var(--sage); color: var(--sage); background: rgba(143, 188, 143, 0.12); }
+  .git-st { width: 12px; flex: none; font-weight: 600; text-align: center; }
+  .git-st.M { color: var(--amber); }
+  .git-st.A, .git-st.U, .git-st.Q { color: var(--sage); }
+  .git-st.D { color: var(--red); }
+  .git-path {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: var(--text);
+  }
+  .git-num { flex: none; font-size: 0.85em; }
+  .git-num .add { color: var(--sage); }
+  .git-num .del { color: var(--red); margin-left: 3px; }
+  .git-commit-box {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+  .git-msg-row {
+    display: flex;
+    gap: 4px;
+    align-items: stretch;
+  }
+  .git-msg-input {
+    flex: 1;
+    min-width: 0;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 5px;
+    padding: 5px 7px;
+    font-size: 0.88em;
+    outline: none;
+    color: var(--text);
+  }
+  .git-msg-input:focus { border-color: var(--sage); }
+  .git-ai-btn {
+    border: 1px solid var(--border);
+    border-radius: 5px;
+    padding: 4px 7px;
+    font-size: 0.84em;
+    color: var(--blue);
+    flex: none;
+  }
+  .git-ai-btn:hover { border-color: var(--blue); color: var(--text); }
+  .git-actions {
+    display: flex;
+    gap: 5px;
+    flex-wrap: wrap;
+  }
+  .git-actions .cli-btn {
+    flex: 1;
+    text-align: center;
+    font-size: 0.84em;
+    padding: 4px 6px;
+    white-space: nowrap;
+  }
+  .git-feedback {
+    font-size: 0.84em;
+    color: var(--dim);
+    min-height: 1.1em;
+    word-break: break-word;
+  }
+  .git-feedback.err { color: var(--red); }
+  .git-feedback.ok { color: var(--sage); }
+  .int-card {
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+    font-size: 0.88em;
+  }
+  .int-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 6px;
+  }
+  .int-link {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .diff-view {
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 10px;
+    overflow: auto;
+    max-height: 60vh;
+    font-size: 0.86em;
+    line-height: 1.45;
+    white-space: pre;
+    margin: 0;
+  }
+  .diff-line { display: block; }
+  .diff-add { color: var(--sage); background: rgba(143, 188, 143, 0.08); }
+  .diff-del { color: var(--red); background: rgba(217, 122, 122, 0.08); }
+  .diff-hunk { color: var(--blue); }
+  .diff-meta { color: var(--dim); }
 </style>
 <link rel="stylesheet" href="/theme.css">
 </head>
@@ -947,6 +1100,40 @@
       <div class="sb-list" id="sbTodos"></div>
     </div>
 
+    <div id="sbGitWrap" class="hidden">
+      <div class="sb-head">
+        <span id="sbGitTitle">CHANGES</span>
+        <button class="sb-head-btn" id="gitRefreshBtn" type="button" title="Refresh git status">↻</button>
+      </div>
+      <div class="git-meta">
+        <span class="git-branch" id="sbGitBranch"></span>
+        <span class="git-ab" id="sbGitAB"></span>
+      </div>
+      <div class="git-files" id="sbGitFiles"></div>
+      <div class="git-commit-box">
+        <div class="git-msg-row">
+          <input class="git-msg-input" id="gitCommitMsg" type="text" placeholder="Commit message…" autocomplete="off">
+          <button class="git-ai-btn" id="gitAiMsgBtn" type="button" title="Draft commit message with AI">✨ AI</button>
+        </div>
+        <div class="git-actions">
+          <button class="cli-btn" id="gitCommitBtn" type="button">Commit</button>
+          <button class="cli-btn ok" id="gitCommitPushBtn" type="button">Commit &amp; Push</button>
+          <button class="cli-btn" id="gitPushBtn" type="button">Push</button>
+        </div>
+        <div class="git-feedback" id="gitFeedback"></div>
+      </div>
+    </div>
+
+    <div id="sbGhWrap" class="hidden">
+      <div class="sb-head">GITHUB</div>
+      <div class="int-card" id="sbGhBody"></div>
+    </div>
+
+    <div id="sbCfWrap" class="hidden">
+      <div class="sb-head">CLOUDFLARE</div>
+      <div class="int-card" id="sbCfBody"></div>
+    </div>
+
     <button class="sb-logout hidden" id="logout" type="button">logout</button>
   </aside>
 </div>
@@ -970,6 +1157,7 @@
   var EFFORTS = ["none", "low", "high", "max"];
   var SLASH_COMMANDS = [
     { name: "balance",   desc: "Check remaining provider credit balance" },
+    { name: "cf",        desc: "Cloudflare Pages/Workers status & deploy" },
     { name: "changelog", desc: "Show what's new in tern" },
     { name: "clear",     desc: "Clear transcript view" },
     { name: "compact",   desc: "Compact conversation context" },
@@ -979,6 +1167,8 @@
     { name: "cost",      desc: "Show session cost & cache" },
     { name: "effort",    desc: "Cycle or set reasoning effort" },
     { name: "ext",       desc: "List loaded plugins (alias)" },
+    { name: "gh",        desc: "GitHub status, PRs, issues & releases" },
+    { name: "git",       desc: "Git status, diff, commit & push" },
     { name: "help",      desc: "Show available commands" },
     { name: "model",     desc: "Browse & switch models (/model free)" },
     { name: "name",      desc: "Rename current session" },
@@ -1059,7 +1249,23 @@
     modalTitle: document.getElementById("modalTitle"),
     modalBody: document.getElementById("modalBody"),
     modalFoot: document.getElementById("modalFoot"),
-    modalClose: document.getElementById("modalClose")
+    modalClose: document.getElementById("modalClose"),
+    sbGitWrap: document.getElementById("sbGitWrap"),
+    sbGitTitle: document.getElementById("sbGitTitle"),
+    sbGitBranch: document.getElementById("sbGitBranch"),
+    sbGitAB: document.getElementById("sbGitAB"),
+    sbGitFiles: document.getElementById("sbGitFiles"),
+    gitRefreshBtn: document.getElementById("gitRefreshBtn"),
+    gitCommitMsg: document.getElementById("gitCommitMsg"),
+    gitAiMsgBtn: document.getElementById("gitAiMsgBtn"),
+    gitCommitBtn: document.getElementById("gitCommitBtn"),
+    gitCommitPushBtn: document.getElementById("gitCommitPushBtn"),
+    gitPushBtn: document.getElementById("gitPushBtn"),
+    gitFeedback: document.getElementById("gitFeedback"),
+    sbGhWrap: document.getElementById("sbGhWrap"),
+    sbGhBody: document.getElementById("sbGhBody"),
+    sbCfWrap: document.getElementById("sbCfWrap"),
+    sbCfBody: document.getElementById("sbCfBody")
   };
 
   var state = {
@@ -1160,10 +1366,16 @@
       showApp();
       refreshStatus();
       refreshBalance(false);
+      refreshGit(true);
       if (!state.balanceTimer) {
         state.balanceTimer = setInterval(function () {
           if (!state.running) { refreshBalance(false); }
         }, 120000);
+      }
+      if (!state.gitTimer) {
+        state.gitTimer = setInterval(function () {
+          if (!state.running) { refreshGit(false); }
+        }, 30000);
       }
       loadHistory();
       connectEvents();
@@ -1881,6 +2093,7 @@
         setRunning(false);
         refreshStatus();
         refreshBalance(false);
+        refreshGit(false);
         scrollBottom(true);
         break;
       case "error":
@@ -2544,8 +2757,356 @@
           .then(function (r) { if (r.status) { applyStatus(r.status); } })
           .catch(function (err) { addError(err.message); });
         return true;
+      case "git":
+        handleGitSlash(arg);
+        return true;
+      case "gh":
+      case "github":
+        handleGitHubSlash(arg);
+        return true;
+      case "cf":
+      case "cloudflare":
+        handleCloudflareSlash(arg);
+        return true;
     }
     return false;
+  }
+
+  /* ---------------- git / github / cloudflare sidebar & modals ---------------- */
+
+  function setGitFeedback(text, kind) {
+    if (!el.gitFeedback) { return; }
+    el.gitFeedback.textContent = text || "";
+    el.gitFeedback.className = "git-feedback" + (kind ? (" " + kind) : "");
+  }
+
+  function refreshGit(includeRemote) {
+    var qs = includeRemote ? "?remote=1" : "?remote=0";
+    return api("/api/git/status" + qs).then(function (data) {
+      state.gitData = data;
+      renderGitSidebar(data);
+      return data;
+    }).catch(function () {});
+  }
+
+  function renderGitSidebar(data) {
+    if (!data) { return; }
+    var git = data.git || {};
+    var gh = data.github || {};
+    var cf = data.cloudflare || {};
+
+    if (!git.is_repo) {
+      el.sbGitWrap.classList.add("hidden");
+    } else {
+      el.sbGitWrap.classList.remove("hidden");
+      var files = git.files || [];
+      el.sbGitTitle.textContent = "CHANGES" + (files.length ? (" (" + files.length + ")") : "");
+      el.sbGitBranch.textContent = git.branch || "HEAD";
+      var ab = [];
+      if (git.ahead > 0) { ab.push("↑" + git.ahead); }
+      if (git.behind > 0) { ab.push("↓" + git.behind); }
+      if (git.total_added || git.total_removed) {
+        ab.push("+" + (git.total_added || 0) + " -" + (git.total_removed || 0));
+      }
+      el.sbGitAB.textContent = ab.join(" · ");
+
+      el.sbGitFiles.innerHTML = "";
+      if (!files.length) {
+        el.sbGitFiles.innerHTML = '<div class="sb-dim">Working tree clean</div>';
+      } else {
+        files.forEach(function (f) {
+          var row = document.createElement("div");
+          row.className = "git-file";
+
+          var stBtn = document.createElement("button");
+          stBtn.type = "button";
+          stBtn.className = "git-stage-btn" + (f.staged ? " staged" : "");
+          stBtn.textContent = f.staged ? "✓" : "";
+          stBtn.title = f.staged ? "Unstage file" : "Stage file";
+          stBtn.addEventListener("click", function (ev) {
+            ev.stopPropagation();
+            var url = f.staged ? "/api/git/unstage" : "/api/git/stage";
+            api(url, { method: "POST", body: { paths: [f.path] } })
+              .then(function (r) {
+                if (state.gitData) { state.gitData.git = r.git; renderGitSidebar(state.gitData); }
+                else { refreshGit(false); }
+              })
+              .catch(function (err) { setGitFeedback(err.message, "err"); });
+          });
+
+          var stCode = f.status || "M";
+          var stSpan = document.createElement("span");
+          stSpan.className = "git-st " + (stCode === "?" ? "Q" : stCode);
+          stSpan.textContent = stCode;
+
+          var pSpan = document.createElement("span");
+          pSpan.className = "git-path";
+          pSpan.textContent = f.path;
+          pSpan.title = f.path + " (click to view diff)";
+
+          var numSpan = document.createElement("span");
+          numSpan.className = "git-num";
+          if (f.added > 0) {
+            var a = document.createElement("span");
+            a.className = "add";
+            a.textContent = "+" + f.added;
+            numSpan.appendChild(a);
+          }
+          if (f.removed > 0) {
+            var d = document.createElement("span");
+            d.className = "del";
+            d.textContent = "-" + f.removed;
+            numSpan.appendChild(d);
+          }
+
+          row.appendChild(stBtn);
+          row.appendChild(stSpan);
+          row.appendChild(pSpan);
+          row.appendChild(numSpan);
+          row.addEventListener("click", function () {
+            openDiffModal(f.path, !!f.staged);
+          });
+          el.sbGitFiles.appendChild(row);
+        });
+      }
+    }
+
+    // GitHub section
+    if (gh.repo) {
+      el.sbGhWrap.classList.remove("hidden");
+      var ghHtml = '<div class="int-row"><a class="int-link" href="https://github.com/' + escapeHTML(gh.repo) + '" target="_blank" rel="noopener">' + escapeHTML(gh.repo) + '</a></div>';
+      if (gh.pr) {
+        var badge = gh.pr.draft ? "draft" : (gh.pr.checks_state && gh.pr.checks_state !== "none" ? gh.pr.checks_state : gh.pr.state);
+        ghHtml += '<div class="int-row"><a class="int-link" href="' + escapeHTML(gh.pr.url || "#") + '" target="_blank" rel="noopener">PR #' + gh.pr.number + ' ' + escapeHTML(gh.pr.title) + '</a><span class="badge">' + escapeHTML(badge) + '</span></div>';
+      } else if (gh.gh_installed) {
+        ghHtml += '<div class="int-row"><span class="sb-dim">No open PR</span><button class="cli-btn" id="ghCreatePrBtn" type="button">+ Create PR</button></div>';
+      }
+      if (gh.latest_run) {
+        var rState = gh.latest_run.conclusion || gh.latest_run.status || "";
+        ghHtml += '<div class="int-row"><span class="sb-dim int-link">CI: ' + escapeHTML(gh.latest_run.name) + '</span><span class="badge">' + escapeHTML(rState) + '</span></div>';
+      }
+      el.sbGhBody.innerHTML = ghHtml;
+      var prBtn = document.getElementById("ghCreatePrBtn");
+      if (prBtn) { prBtn.addEventListener("click", openCreatePRModal); }
+    } else {
+      el.sbGhWrap.classList.add("hidden");
+    }
+
+    // Cloudflare section
+    if (cf.detected) {
+      el.sbCfWrap.classList.remove("hidden");
+      var cfName = cf.project_name || "(unnamed)";
+      var cfHtml = '<div class="int-row"><span class="int-link">' + escapeHTML(cfName) + '</span><span class="badge">' + escapeHTML(cf.kind || "workers") + '</span></div>';
+      if (cf.latest_deploy && cf.latest_deploy.url) {
+        cfHtml += '<div class="int-row"><a class="int-link" href="' + escapeHTML(cf.latest_deploy.url) + '" target="_blank" rel="noopener">' + escapeHTML(cf.latest_deploy.url.replace(/^https?:\/\//, "")) + '</a><span class="badge">' + escapeHTML(cf.latest_deploy.status || "") + '</span></div>';
+      }
+      cfHtml += '<div class="int-row"><span class="sb-dim">' + escapeHTML(cf.config_file || "") + '</span><button class="cli-btn ok" id="cfDeployBtn" type="button">Deploy</button></div>';
+      el.sbCfBody.innerHTML = cfHtml;
+      var depBtn = document.getElementById("cfDeployBtn");
+      if (depBtn) { depBtn.addEventListener("click", deployCloudflare); }
+    } else {
+      el.sbCfWrap.classList.add("hidden");
+    }
+  }
+
+  function formatDiffHTML(raw) {
+    if (!raw || !raw.trim()) {
+      return '<span class="sb-dim">No diff output.</span>';
+    }
+    return raw.split("\n").map(function (line) {
+      var cls = "diff-line";
+      if (line.startsWith("+++") || line.startsWith("---") || line.startsWith("diff --git") || line.startsWith("index ")) {
+        cls += " diff-meta";
+      } else if (line.startsWith("@@")) {
+        cls += " diff-hunk";
+      } else if (line.startsWith("+")) {
+        cls += " diff-add";
+      } else if (line.startsWith("-")) {
+        cls += " diff-del";
+      }
+      return '<span class="' + cls + '">' + escapeHTML(line) + '</span>';
+    }).join("");
+  }
+
+  function openDiffModal(path, staged) {
+    var title = path ? ("Diff · " + path) : "Diff · all changes";
+    openModal(title, '<div class="sb-dim">Loading diff…</div>', "");
+    var qs = "?path=" + encodeURIComponent(path || "") + "&staged=" + (staged ? "1" : "0");
+    api("/api/git/diff" + qs).then(function (r) {
+      var body = '<pre class="diff-view">' + formatDiffHTML(r.diff || "") + '</pre>';
+      var foot = "";
+      if (path) {
+        foot = '<button class="cli-btn ' + (staged ? "" : "ok") + '" id="diffStageBtn" type="button">' +
+          (staged ? "Unstage file" : "Stage file") + '</button><span>Press Esc to close</span>';
+      } else {
+        foot = '<span>Press Esc to close</span>';
+      }
+      openModal(title, body, foot);
+      var btn = document.getElementById("diffStageBtn");
+      if (btn) {
+        btn.addEventListener("click", function () {
+          var url = staged ? "/api/git/unstage" : "/api/git/stage";
+          api(url, { method: "POST", body: { paths: [path] } }).then(function () {
+            refreshGit(false);
+            openDiffModal(path, !staged);
+          }).catch(function (err) { setGitFeedback(err.message, "err"); });
+        });
+      }
+    }).catch(function (err) {
+      openModal(title, '<div class="modal-err">' + escapeHTML(err.message) + '</div>', "");
+    });
+  }
+
+  function draftAICommitMessage() {
+    setGitFeedback("Drafting commit message…");
+    el.gitAiMsgBtn.disabled = true;
+    api("/api/git/commit-message", { method: "POST" }).then(function (r) {
+      if (r.message) {
+        el.gitCommitMsg.value = r.message;
+        el.gitCommitMsg.focus();
+        setGitFeedback("Drafted with AI", "ok");
+      }
+    }).catch(function (err) {
+      setGitFeedback(err.message, "err");
+    }).then(function () {
+      el.gitAiMsgBtn.disabled = false;
+    });
+  }
+
+  function commitChanges(push) {
+    var msg = (el.gitCommitMsg.value || "").trim();
+    if (!msg) {
+      setGitFeedback("Enter a commit message first (or click ✨ AI).", "err");
+      el.gitCommitMsg.focus();
+      return;
+    }
+    setGitFeedback(push ? "Committing & pushing…" : "Committing…");
+    api("/api/git/commit", { method: "POST", body: { message: msg, push: !!push } }).then(function (r) {
+      el.gitCommitMsg.value = "";
+      var res = r.result || {};
+      setGitFeedback((res.pushed ? "Committed & pushed " : "Committed ") + (res.sha || ""), "ok");
+      addInfo((res.pushed ? "Committed & pushed " : "Committed ") + (res.sha || "") + ": " + msg);
+      refreshGit(true);
+    }).catch(function (err) {
+      setGitFeedback(err.message, "err");
+    });
+  }
+
+  function pushChanges() {
+    setGitFeedback("Pushing…");
+    api("/api/git/push", { method: "POST" }).then(function (r) {
+      setGitFeedback(r.output || "Pushed", "ok");
+      addInfo("Git push: " + (r.output || "ok"));
+      refreshGit(true);
+    }).catch(function (err) {
+      setGitFeedback(err.message, "err");
+    });
+  }
+
+  function openCreatePRModal() {
+    var body = '<div class="modal-field"><label>Title</label><input class="modal-input" id="prTitle" type="text" placeholder="feat: describe your change"></div>' +
+      '<div class="modal-field"><label>Body (optional)</label><textarea class="modal-input" id="prBody" rows="4" placeholder="Summary of changes…"></textarea></div>' +
+      '<div class="modal-field"><label><input id="prDraft" type="checkbox"> Open as draft PR</label></div>' +
+      '<div class="modal-err" id="prErr"></div>';
+    var foot = '<button class="cli-btn ok" id="prSubmitBtn" type="button">Create PR</button><span>Uses gh CLI</span>';
+    openModal("Create GitHub Pull Request", body, foot);
+    document.getElementById("prSubmitBtn").addEventListener("click", function () {
+      var title = (document.getElementById("prTitle").value || "").trim();
+      var prBody = (document.getElementById("prBody").value || "").trim();
+      var draft = !!document.getElementById("prDraft").checked;
+      var errEl = document.getElementById("prErr");
+      if (!title) { errEl.textContent = "Title is required."; return; }
+      errEl.textContent = "Creating PR…";
+      api("/api/github/pr", { method: "POST", body: { title: title, body: prBody, draft: draft } })
+        .then(function (r) {
+          closeModal();
+          addInfo("Created PR: " + (r.url || title));
+          refreshGit(true);
+        })
+        .catch(function (err) { errEl.textContent = err.message; });
+    });
+  }
+
+  function deployCloudflare() {
+    openModal("Cloudflare Deploy", '<div class="sb-dim">Running wrangler deploy…</div>', "");
+    api("/api/cloudflare/deploy", { method: "POST" }).then(function (r) {
+      openModal("Cloudflare Deploy", '<pre class="diff-view">' + escapeHTML(r.output || "Deployment finished.") + '</pre>', "Done");
+      addInfo("Cloudflare deployment completed.");
+      refreshGit(true);
+    }).catch(function (err) {
+      openModal("Cloudflare Deploy", '<div class="modal-err">' + escapeHTML(err.message) + '</div>', "");
+    });
+  }
+
+  function handleGitSlash(arg) {
+    var parts = (arg || "").trim().split(/\s+/);
+    var sub = (parts[0] || "").toLowerCase();
+    var rest = parts.slice(1).join(" ");
+    if (!sub || sub === "diff") {
+      openDiffModal(rest, false);
+      return;
+    }
+    if (sub === "status") {
+      refreshGit(true).then(function (d) {
+        var g = (d && d.git) || {};
+        if (!g.is_repo) { addInfo("Not inside a git repository."); return; }
+        var lines = ["Branch: " + g.branch + (g.ahead ? (" ↑" + g.ahead) : "") + (g.behind ? (" ↓" + g.behind) : "")];
+        (g.files || []).forEach(function (f) { lines.push("  " + f.status + " " + f.path + " (+" + f.added + " -" + f.removed + ")"); });
+        if (!(g.files || []).length) { lines.push("  Working tree clean."); }
+        addInfo(lines.join("\n"));
+      });
+      return;
+    }
+    if (sub === "push") { pushChanges(); return; }
+    if (sub === "commit" || sub === "cp") {
+      if (!rest) { addError("Usage: /git " + sub + " <commit message>"); return; }
+      el.gitCommitMsg.value = rest;
+      commitChanges(sub === "cp");
+      return;
+    }
+    addInfo("Usage: /git [status | diff [path] | commit <msg> | cp <msg> | push]");
+  }
+
+  function handleGitHubSlash(arg) {
+    var sub = (arg || "").trim().toLowerCase();
+    if (sub === "pr" || sub === "create") { openCreatePRModal(); return; }
+    api("/api/github/action?action=" + encodeURIComponent(sub || "status")).then(function (r) {
+      if (r.prs) {
+        addInfo(r.prs.length ? r.prs.map(function (p) { return "#" + p.number + " " + p.title + " (" + p.url + ")"; }).join("\n") : "No open pull requests.");
+      } else if (r.issues) {
+        addInfo(r.issues.length ? r.issues.map(function (i) { return "#" + i.number + " " + i.title + " (" + i.url + ")"; }).join("\n") : "No open issues.");
+      } else if (r.releases) {
+        addInfo(r.releases.length ? r.releases.map(function (x) { return x.tag_name + (x.is_latest ? " [latest]" : "") + (x.name ? (" — " + x.name) : ""); }).join("\n") : "No releases found.");
+      } else {
+        addInfo(r.summary || "GitHub status unavailable.");
+      }
+    }).catch(function (err) { addError(err.message); });
+  }
+
+  function handleCloudflareSlash(arg) {
+    var sub = (arg || "").trim().toLowerCase();
+    if (sub === "deploy") { deployCloudflare(); return; }
+    refreshGit(true).then(function (d) {
+      var cf = (d && d.cloudflare) || {};
+      if (!cf.detected) { addInfo("No Cloudflare project detected (add wrangler.toml, wrangler.json, or wrangler.jsonc)."); return; }
+      addInfo("Cloudflare " + cf.kind + ": " + (cf.project_name || "(unnamed)") + " (" + cf.config_file + ")" +
+        (cf.latest_deploy && cf.latest_deploy.url ? ("\nLatest: " + cf.latest_deploy.url + " [" + cf.latest_deploy.status + "]") : "") +
+        "\nRun /cf deploy or click Deploy in the right sidebar.");
+    });
+  }
+
+  if (el.gitRefreshBtn) { el.gitRefreshBtn.addEventListener("click", function () { refreshGit(true); }); }
+  if (el.gitAiMsgBtn) { el.gitAiMsgBtn.addEventListener("click", draftAICommitMessage); }
+  if (el.gitCommitBtn) { el.gitCommitBtn.addEventListener("click", function () { commitChanges(false); }); }
+  if (el.gitCommitPushBtn) { el.gitCommitPushBtn.addEventListener("click", function () { commitChanges(true); }); }
+  if (el.gitPushBtn) { el.gitPushBtn.addEventListener("click", pushChanges); }
+  if (el.gitCommitMsg) {
+    el.gitCommitMsg.addEventListener("keydown", function (ev) {
+      if (ev.key === "Enter" && !ev.shiftKey) {
+        ev.preventDefault();
+        commitChanges(ev.ctrlKey || ev.metaKey);
+      }
+    });
   }
 
   /* ---------------- composer & global CLI shortcuts ---------------- */

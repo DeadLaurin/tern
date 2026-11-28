@@ -24,6 +24,7 @@ import (
 var builtinCommandNames = []string{
 	"agents",
 	"balance",
+	"cf",
 	"changelog",
 	"clear",
 	"compact",
@@ -35,6 +36,8 @@ var builtinCommandNames = []string{
 	"export",
 	"ext",
 	"fork",
+	"gh",
+	"git",
 	"help",
 	"mcp",
 	"model",
@@ -62,18 +65,21 @@ var builtinCommandNames = []string{
 var builtinCommandDescriptions = map[string]string{
 	"agents":    "Inspect sub-agents",
 	"balance":   "Check remaining provider credit balance",
+	"cf":        "Cloudflare Pages/Workers status & deploy",
 	"changelog": "Show what's new in tern",
 	"clear":     "Clear transcript view",
-	"compact":  "Compact conversation context",
-	"config":   "Show effective settings",
-	"context":  "Show context token usage",
-	"copy":     "Copy last assistant response",
-	"cost":     "Show session cost & cache",
-	"effort":   "Set reasoning effort",
-	"export":   "Export session transcript",
-	"ext":      "List loaded plugins (alias)",
-	"fork":     "Fork current session",
-	"help":     "Show commands & shortcuts",
+	"compact":   "Compact conversation context",
+	"config":    "Show effective settings",
+	"context":   "Show context token usage",
+	"copy":      "Copy last assistant response",
+	"cost":      "Show session cost & cache",
+	"effort":    "Set reasoning effort",
+	"export":    "Export session transcript",
+	"ext":       "List loaded plugins (alias)",
+	"fork":      "Fork current session",
+	"gh":        "GitHub status, PRs, issues & releases",
+	"git":       "Git diff, stage, commit & push",
+	"help":      "Show commands & shortcuts",
 	"mcp":      "Inspect MCP servers",
 	"model":    "Switch model & reasoning",
 	"mouse":    "Toggle TUI mouse capture (native select)",
@@ -120,6 +126,15 @@ func (m *Model) handleSlash(line string, attachments []provider.ContentPart) tea
 
 	case "balance":
 		return m.fetchBalanceCmd(true)
+
+	case "git":
+		return m.cmdGit(args)
+
+	case "gh", "github":
+		return m.cmdGitHub(args)
+
+	case "cf", "cloudflare":
+		return m.cmdCloudflare(args)
 
 	case "effort", "thinking":
 		return m.cmdEffort(args)

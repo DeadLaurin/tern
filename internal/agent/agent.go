@@ -128,8 +128,12 @@ type Agent struct {
 	pendingSteers []string
 
 	initialized bool
-	history     []provider.Message
-	turn        int
+	// defaultPrompt records that SystemPrompt came from tern's built-in
+	// default rather than from the caller. Only then is model-specific
+	// guidance appended, so custom prompts are never altered.
+	defaultPrompt bool
+	history       []provider.Message
+	turn          int
 	// firstUserSent records whether initial dynamic context (environment,
 	// project instructions) has already been prepended to a user message in
 	// the active session.
@@ -146,6 +150,12 @@ type Agent struct {
 	lastReasoningTokens  int
 	pendingContextChars  int
 	inTurn               bool
+
+	// promptMu guards the cached default system prompt. It only changes when
+	// the model changes, so the prefix stays byte-identical within a session.
+	promptMu    sync.RWMutex
+	promptReady bool
+	promptText  string
 }
 
 // New creates an agent and loads any existing session history.
@@ -198,7 +208,9 @@ func (a *Agent) ensureInit() {
 	}
 	if a.SystemPrompt == "" {
 		a.SystemPrompt = SystemPrompt
+		a.defaultPrompt = true
 	}
+	a.refreshDefaultPrompt()
 
 	if a.Todos == nil {
 		if t, ok := a.Registry.Get(tools.ToolTodo); ok {
@@ -264,6 +276,7 @@ func (a *Agent) SetModel(model string) {
 	defer a.runMu.Unlock()
 	a.ensureInit()
 	a.Config.Model = model
+	a.refreshDefaultPrompt()
 }
 
 // SetReasoningEffort updates the reasoning effort sent with provider requests.
@@ -741,10 +754,44 @@ func (a *Agent) buildRequest() provider.ChatRequest {
 }
 
 func (a *Agent) systemPrompt() string {
-	if strings.TrimSpace(a.SystemPrompt) != "" {
+	custom := strings.TrimSpace(a.SystemPrompt)
+	if custom != "" && (!a.defaultPrompt || a.SystemPrompt != SystemPrompt) {
 		return a.SystemPrompt
 	}
-	return SystemPrompt
+
+	a.promptMu.RLock()
+	ready, text := a.promptReady, a.promptText
+	a.promptMu.RUnlock()
+	if ready {
+		return text
+	}
+
+	a.promptMu.Lock()
+	defer a.promptMu.Unlock()
+	if !a.promptReady {
+		a.promptText = a.buildDefaultPrompt()
+		a.promptReady = true
+	}
+	return a.promptText
+}
+
+// buildDefaultPrompt is the uncached form of the default system prompt.
+func (a *Agent) buildDefaultPrompt() string {
+	model := ""
+	if a.Config != nil {
+		model = a.Config.Model
+	}
+	return effectiveDefaultSystemPrompt(model)
+}
+
+// refreshDefaultPrompt recomputes the cached default system prompt for the
+// current model. Callers must hold runMu (or own the agent exclusively).
+func (a *Agent) refreshDefaultPrompt() {
+	text := a.buildDefaultPrompt()
+	a.promptMu.Lock()
+	a.promptText = text
+	a.promptReady = true
+	a.promptMu.Unlock()
 }
 
 // cacheDebug computes prefix hashes and warns about unexpected divergence.

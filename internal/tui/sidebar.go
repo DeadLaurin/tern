@@ -95,6 +95,7 @@ func (m *Model) sidebarView(width, height int) string {
 		return ""
 	}
 	m.sidebarAgentRows = make(map[int]string)
+	m.sidebarGitRows = make(map[int]string)
 	lines := make([]string, 0, height)
 	add := func(block string) {
 		if block == "" {
@@ -108,16 +109,22 @@ func (m *Model) sidebarView(width, height int) string {
 	add(m.sidebarContext(width))
 	add("")
 
-	// 2. Sub-agents.
+	// 2. Git Changes, GitHub & Cloudflare.
+	if block := m.sidebarChanges(width, len(lines)); block != "" {
+		add(block)
+		add("")
+	}
+
+	// 3. Sub-agents.
 	add(m.sidebarSubagents(width, height-len(lines)-6, len(lines)))
 
-	// 3. Tasks / todos.
+	// 4. Tasks / todos.
 	if block := m.sidebarTodos(width); block != "" {
 		add("")
 		add(block)
 	}
 
-	// 4. Active task.
+	// 5. Active task.
 	if block := m.sidebarActiveTask(width); block != "" {
 		add("")
 		add(block)
@@ -128,6 +135,11 @@ func (m *Model) sidebarView(width, height int) string {
 	for y := range m.sidebarAgentRows {
 		if y >= height {
 			delete(m.sidebarAgentRows, y)
+		}
+	}
+	for y := range m.sidebarGitRows {
+		if y >= height {
+			delete(m.sidebarGitRows, y)
 		}
 	}
 	return m.fitSidebar(lines, width, height)
@@ -239,6 +251,82 @@ func (m *Model) sidebarGauge(label string, pct, barWidth int, suffix string, sag
 		line += " " + suffix
 	}
 	return truncateAnsi(line, m.sidebarWidth())
+}
+
+func (m *Model) sidebarChanges(width, startLine int) string {
+	if !m.gitStatus.IsRepo && !m.cfStatus.Detected {
+		return ""
+	}
+	title := "CHANGES"
+	if n := len(m.gitStatus.Files); n > 0 {
+		title = fmt.Sprintf("CHANGES (%d)", n)
+	}
+	lines := []string{m.sidebarHeader(title, width)}
+
+	if m.gitStatus.IsRepo {
+		meta := m.gitStatus.Branch
+		if m.gitStatus.Ahead > 0 {
+			meta += fmt.Sprintf(" ↑%d", m.gitStatus.Ahead)
+		}
+		if m.gitStatus.Behind > 0 {
+			meta += fmt.Sprintf(" ↓%d", m.gitStatus.Behind)
+		}
+		if m.gitStatus.TotalAdded > 0 || m.gitStatus.TotalRemoved > 0 {
+			meta += fmt.Sprintf(" +%d -%d", m.gitStatus.TotalAdded, m.gitStatus.TotalRemoved)
+		}
+		if meta != "" {
+			lines = append(lines, m.st.paint(m.st.dim, truncateCell(meta, width)))
+		}
+		if len(m.gitStatus.Files) == 0 {
+			lines = append(lines, m.st.paint(m.st.dim, "Working tree clean"))
+		} else {
+			maxFiles := 5
+			for i, f := range m.gitStatus.Files {
+				if i >= maxFiles {
+					lines = append(lines, m.st.paint(m.st.dim, fmt.Sprintf("  … %d more (/git)", len(m.gitStatus.Files)-i)))
+					m.sidebarGitRows[startLine+len(lines)-1] = "__open__"
+					break
+				}
+				mark := "·"
+				if f.Staged {
+					mark = "✓"
+				}
+				num := ""
+				if f.Added > 0 || f.Removed > 0 {
+					num = fmt.Sprintf(" +%d -%d", f.Added, f.Removed)
+				}
+				avail := maxInt(8, width-displayWidth(num)-5)
+				row := fmt.Sprintf("%s %s %s", mark, f.Status, truncateCell(f.Path, avail))
+				if pad := width - displayWidth(row) - displayWidth(num); pad > 0 {
+					row += strings.Repeat(" ", pad)
+				}
+				row += m.st.paint(m.st.dim, num)
+				lines = append(lines, truncateAnsi(row, width))
+				m.sidebarGitRows[startLine+len(lines)-1] = f.Path
+			}
+		}
+		lines = append(lines, m.st.paint(m.st.accent, truncateCell("[Diff · Commit & Push] (/git)", width)))
+		m.sidebarGitRows[startLine+len(lines)-1] = "__commit__"
+	}
+
+	if m.ghStatus.Repo != "" {
+		ghLine := "GH " + m.ghStatus.Repo
+		if m.ghStatus.PR != nil {
+			ghLine = fmt.Sprintf("GH PR #%d · %s", m.ghStatus.PR.Number, emptyFallback(m.ghStatus.PR.ChecksState, m.ghStatus.PR.State))
+		} else if m.ghStatus.LatestRun != nil {
+			ghLine = fmt.Sprintf("GH CI · %s", emptyFallback(m.ghStatus.LatestRun.Conclusion, m.ghStatus.LatestRun.Status))
+		}
+		lines = append(lines, m.st.paint(m.st.dim, truncateCell(ghLine, width)))
+		m.sidebarGitRows[startLine+len(lines)-1] = "__open__"
+	}
+
+	if m.cfStatus.Detected {
+		cfLine := fmt.Sprintf("CF %s · %s", m.cfStatus.Kind, emptyFallback(m.cfStatus.ProjectName, m.cfStatus.ConfigFile))
+		lines = append(lines, m.st.paint(m.st.warn, truncateCell(cfLine, width)))
+		m.sidebarGitRows[startLine+len(lines)-1] = "__open__"
+	}
+
+	return strings.Join(lines, "\n")
 }
 
 func (m *Model) sidebarSubagents(width, budget, startLine int) string {

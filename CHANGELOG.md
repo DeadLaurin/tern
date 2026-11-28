@@ -4,6 +4,20 @@ All notable changes to tern are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and tern adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v0.7.6] - 2026-11-28
+
+### Added
+- **Git, GitHub & Cloudflare integration in TUI and `tern serve` right sidebar**:
+  - Live **Changes** section in both TUI and Web UI right side panels showing current branch, `↑ahead ↓behind`, `+added -removed`, and clickable changed files with stage/unstage toggles.
+  - Interactive **Diff & Commit / Push** interface (right sidebar + Diff modal in `tern serve`, clickable sidebar + `/git` modal in TUI) with syntax-colored diffs, **AI-drafted commit messages** (`✨ AI` / `Ctrl+G`), **Commit**, **Commit & Push**, and **Push**.
+  - **GitHub integration** (`gh` CLI): shows repo link, active PR status + checks badge, latest GitHub Actions CI run, quick **Create PR** modal/action, and `/gh [status|prs|issues|releases|pr <title>]`.
+  - **Cloudflare Pages/Workers integration**: detects `wrangler.toml`, `wrangler.json`, and `wrangler.jsonc`, surfaces project/deployment status in the right sidebar, and adds a one-click **Deploy** action + `/cf [status|deploy]`.
+- **DeepSeek V4 Flash speed optimizations**:
+  - Cache-safe static execution playbook (`ModelOptimizationGuidance`) for `deepseek-flash` encouraging parallel read-only batching, native tools over shell, chained verification commands, and crisp reasoning, plus a built-in `deepseek-flash-fast` fallback skill.
+
+### Improved
+- **Faster, hang-resistant `bash` tool execution**: bounded foreground output capture (`newBoundedBuffer`), closed `stdin`, non-interactive environment defaults (`GIT_TERMINAL_PROMPT=0`, `PAGER=cat`, `GIT_PAGER=cat`, `CI=true`, `DEBIAN_FRONTEND=noninteractive`), and tighter tool guidance.
+
 ## [v0.7.5] - 2026-11-28
 
 ### Added

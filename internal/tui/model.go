@@ -18,6 +18,7 @@ import (
 	"github.com/tern-agent/tern/internal/agent"
 	"github.com/tern-agent/tern/internal/config"
 	terncontext "github.com/tern-agent/tern/internal/context"
+	"github.com/tern-agent/tern/internal/integrations"
 	"github.com/tern-agent/tern/internal/permission"
 	"github.com/tern-agent/tern/internal/provider"
 	"github.com/tern-agent/tern/internal/subagent"
@@ -274,7 +275,15 @@ type Model struct {
 	// each view records where its clickable rows landed before returning.
 	entrySpans         []entrySpan
 	sidebarAgentRows   map[int]string
+	sidebarGitRows     map[int]string
 	sidebarX           int
+
+	// Live Git / GitHub / Cloudflare integration state for the right sidebar
+	// and the /git diff & commit modal.
+	gitStatus integrations.GitStatus
+	ghStatus  integrations.GitHubStatus
+	cfStatus  integrations.CloudflareStatus
+	gitModal  gitModalState
 	viewportX          int
 	statusHits         []statusHit
 	statusX            int
@@ -345,6 +354,9 @@ func (m *Model) Init() tea.Cmd {
 			cmds = append(cmds, balCmd)
 		}
 	}
+	if gitCmd := m.fetchGitStatusCmd(true); gitCmd != nil {
+		cmds = append(cmds, gitCmd)
+	}
 	if len(cmds) == 1 {
 		return cmds[0]
 	}
@@ -401,6 +413,20 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case modelsLoadedMsg:
 		m.handleModelsLoaded(msg)
+		return m, nil
+
+	case gitStatusMsg:
+		return m, m.handleGitStatusMsg(msg)
+
+	case gitDiffMsg:
+		m.handleGitDiffMsg(msg)
+		return m, nil
+
+	case gitActionMsg:
+		return m, m.handleGitActionMsg(msg)
+
+	case gitAIMsgResult:
+		m.handleGitAIMsgResult(msg)
 		return m, nil
 
 	case balanceLoadedMsg:
@@ -477,8 +503,17 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case turnDoneMsg:
 		m.handleTurnDone(msg)
+		var cmds []tea.Cmd
 		if !m.running && !m.needsSetup {
-			return m, m.fetchBalanceCmd(false)
+			if balCmd := m.fetchBalanceCmd(false); balCmd != nil {
+				cmds = append(cmds, balCmd)
+			}
+		}
+		if gitCmd := m.fetchGitStatusCmd(false); gitCmd != nil {
+			cmds = append(cmds, gitCmd)
+		}
+		if len(cmds) > 0 {
+			return m, tea.Batch(cmds...)
 		}
 		return m, nil
 

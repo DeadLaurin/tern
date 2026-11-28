@@ -13,6 +13,74 @@ import (
 // name exists.
 var ErrSkillNotFound = errors.New("context: skill not found")
 
+// BuiltinDeepSeekFlashSkill is the name of tern's built-in skill for DeepSeek
+// Flash. It is not stored on disk and is deliberately excluded from
+// ListSkills, so directory discovery results are unchanged; LoadSkill falls
+// back to it only when no user skill overrides the name.
+const BuiltinDeepSeekFlashSkill = "deepseek-flash-fast"
+
+// builtinSkillBodies holds tern's built-in skills by name.
+var builtinSkillBodies = map[string]Skill{
+	BuiltinDeepSeekFlashSkill: {
+		SkillMeta: SkillMeta{
+			Name:        BuiltinDeepSeekFlashSkill,
+			Description: "Fast execution playbook for DeepSeek Flash: batch reads, skip the shell, verify once.",
+			Tags:        []string{"deepseek", "deepseek-flash", "performance", "workflow"},
+		},
+		Body: `# DeepSeek Flash fast execution
+
+Use this when running on DeepSeek Flash (deepseek-flash). It targets the patterns Flash is
+slowest at: one-tool-per-turn loops, shelling out for file inspection, and re-running full
+verification after every edit.
+
+## Rules
+
+1. Batch independent work. Issue every independent read/grep/glob call in one turn. Several
+   reads, several greps, or several globs together, never one call per round-trip.
+2. Skip the shell for file work. Do not run bash with cat, head, tail, find, grep, rg, or sed.
+   Use the native read, grep, glob, edit, and multi_edit tools.
+3. Edit once. Collect all changes to a file and apply them with multi_edit, then re-read only
+   the region you changed if needed.
+4. Verify cheaply. While iterating, run the focused package test only, for example
+   "go test ./internal/agent/". At the end run one chained command covering everything, for
+   example "go vet ./... && go test ./...".
+5. Stop exploring early. Once you have enough context to make the edit, make it. Do not
+   re-read files you already understand or survey directories you do not need.
+6. Delegate breadth. For wide multi-directory exploration or independent parallel tasks, hand
+   work to task sub-agents instead of serializing many sequential reads yourself.
+`,
+	},
+}
+
+// BuiltinModelSkill returns the built-in skill that matches model, or nil when
+// the model has no built-in skill. User skills with the same name always take
+// precedence at load time.
+func BuiltinModelSkill(model string) *Skill {
+	name := strings.ToLower(strings.TrimSpace(model))
+	if i := strings.LastIndexAny(name, "/:"); i >= 0 {
+		name = strings.TrimSpace(name[i+1:])
+	}
+	if !strings.HasPrefix(name, "deepseek-flash") {
+		return nil
+	}
+	rest := strings.TrimPrefix(name, "deepseek-flash")
+	if rest != "" && !strings.HasPrefix(rest, "-") && !strings.HasPrefix(rest, ".") && !strings.HasPrefix(rest, "@") {
+		return nil
+	}
+	return builtinSkill(BuiltinDeepSeekFlashSkill)
+}
+
+// builtinSkill returns a copy of a built-in skill so callers cannot mutate
+// the shared definition.
+func builtinSkill(name string) *Skill {
+	skill, ok := builtinSkillBodies[name]
+	if !ok {
+		return nil
+	}
+	skill.Tags = append([]string(nil), skill.Tags...)
+	return &skill
+}
+
 // SkillMeta is the lightweight metadata returned by ListSkills. The markdown
 // body is deliberately omitted so that a system-prompt index can be built
 // without reading every skill in full.
@@ -140,6 +208,11 @@ func LoadSkill(workDir, globalConfigDir, name string) (*Skill, error) {
 			meta.Tags = fm.Tags
 		}
 		return &Skill{SkillMeta: meta, Body: strings.TrimSpace(body)}, nil
+	}
+
+	// User skills win; built-ins are only a fallback.
+	if skill := builtinSkill(name); skill != nil {
+		return skill, nil
 	}
 
 	return nil, fmt.Errorf("%w: %q", ErrSkillNotFound, name)

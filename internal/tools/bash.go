@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"os/exec"
 	"runtime"
 	"strings"
@@ -354,11 +355,11 @@ type BashTool struct {
 var bashSchema = schema(`{
   "type": "object",
   "properties": {
-    "command": {"type": "string", "description": "Shell command to execute."},
+    "command": {"type": "string", "description": "Shell command to execute. Chain dependent steps with && in one call (e.g. \"go build ./... && go test ./...\") instead of separate calls. Prefer the read, grep, glob, edit, and multi_edit tools for inspecting or editing files."},
     "action": {"type": "string", "enum": ["run", "poll", "kill"], "description": "run executes a command (default); poll reads a background job's output and status; kill terminates a background job."},
-    "job_id": {"type": "string", "description": "Background job id, required for poll and kill."},
-    "background": {"type": "boolean", "description": "Start the command as a managed background job and return its job_id."},
-    "timeout_seconds": {"type": "integer", "description": "Foreground timeout in seconds (default 60, max 600).", "minimum": 1, "maximum": 600}
+    "job_id": {"type": "string", "description": "Background job id returned by a run with background=true; required for poll and kill."},
+    "background": {"type": "boolean", "description": "Run as a managed background job and return its job_id. Use for dev servers, file watchers, REPLs, or any long-running process; then poll the job instead of waiting for the foreground timeout."},
+    "timeout_seconds": {"type": "integer", "description": "Foreground timeout in seconds (default 60, max 600). Only for commands that finish on their own; do not use it to wait on servers or watchers.", "minimum": 1, "maximum": 600}
   },
   "additionalProperties": false
 }`)
@@ -388,7 +389,7 @@ func (t *BashTool) IsWeb() bool                 { return false }
 func (t *BashTool) IsParallelSafe() bool        { return false }
 func (t *BashTool) Parameters() json.RawMessage { return bashSchema }
 func (t *BashTool) Description() string {
-	return "Execute a shell command in the workspace. Use background=true to start a managed job, then poll or kill it with action=poll/kill and its job_id."
+	return "Execute a shell command in the workspace. Prefer the native read, grep, glob, edit, and multi_edit tools for inspecting and editing files; use bash for builds, tests, and commands that have no native tool. Chain dependent steps with && in a single call rather than making several round-trips. Pass background=true for dev servers, watchers, and other long-running processes so the foreground call does not block until the timeout, then read output with action=poll and stop it with action=kill using its job_id."
 }
 
 type bashArgs struct {
@@ -504,8 +505,16 @@ func (t *BashTool) runForeground(ctx context.Context, env ExecEnv, args bashArgs
 	cmd.Cancel = func() error { return killProcessGroup(cmd) }
 	cmd.WaitDelay = 2 * time.Second
 
+	// Capture into a bounded buffer so noisy commands never allocate their full
+	// output in memory before it is truncated. The child also gets a nil stdin
+	// (an empty device) so a command that reads input cannot block forever.
+	output := newBoundedBuffer(env.OutputLimit())
+	cmd.Stdin = nil
+	cmd.Stdout = output
+	cmd.Stderr = output
+
 	started := time.Now()
-	output, err := cmd.CombinedOutput()
+	err := cmd.Run()
 	duration := time.Since(started)
 
 	exitCode := 0
@@ -532,7 +541,7 @@ func (t *BashTool) runForeground(ctx context.Context, env ExecEnv, args bashArgs
 		}
 	}
 
-	out := string(output)
+	out := output.String()
 	if statusMsg != "" {
 		out = strings.TrimRight(out, "\n")
 		if out != "" {
@@ -619,5 +628,54 @@ func buildShellCommandContext(ctx context.Context, shell []string, command, work
 	args = append(args, command)
 	cmd := exec.CommandContext(ctx, shell[0], args...)
 	cmd.Dir = workDir
+	cmd.Env = nonInteractiveEnv(os.Environ())
 	return cmd
+}
+
+// nonInteractiveDefaults are environment variables that keep shell commands
+// from blocking on an interactive prompt the agent can never answer.
+var nonInteractiveDefaults = [][2]string{
+	{"GIT_TERMINAL_PROMPT", "0"},
+	{"PAGER", "cat"},
+	{"GIT_PAGER", "cat"},
+	{"CI", "true"},
+	{"DEBIAN_FRONTEND", "noninteractive"},
+}
+
+// nonInteractiveEnv returns base augmented with non-interactive defaults. An
+// entry is only appended when base does not already define its key, so a
+// caller-provided value always wins. A nil base means the current process
+// environment, matching exec.Cmd's default.
+func nonInteractiveEnv(base []string) []string {
+	if base == nil {
+		base = os.Environ()
+	}
+	out := make([]string, 0, len(base)+len(nonInteractiveDefaults))
+	out = append(out, base...)
+	for _, kv := range nonInteractiveDefaults {
+		if envHasKey(base, kv[0]) {
+			continue
+		}
+		out = append(out, kv[0]+"="+kv[1])
+	}
+	return out
+}
+
+// envHasKey reports whether env contains an entry for key. Windows environment
+// keys are case-insensitive, so the comparison follows suit there.
+func envHasKey(env []string, key string) bool {
+	for _, entry := range env {
+		i := strings.IndexByte(entry, '=')
+		if i < 0 {
+			continue
+		}
+		name := entry[:i]
+		if name == key {
+			return true
+		}
+		if runtime.GOOS == "windows" && strings.EqualFold(name, key) {
+			return true
+		}
+	}
+	return false
 }

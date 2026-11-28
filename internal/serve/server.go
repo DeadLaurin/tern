@@ -266,6 +266,16 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/subagents/transcript", s.handleSubagentTranscript)
 	mux.HandleFunc("/api/subagents/cancel", s.handleSubagentCancel)
 	mux.HandleFunc("/api/undo", s.handleUndo)
+	mux.HandleFunc("/api/git/status", s.handleGitStatus)
+	mux.HandleFunc("/api/git/diff", s.handleGitDiff)
+	mux.HandleFunc("/api/git/stage", s.handleGitStage)
+	mux.HandleFunc("/api/git/unstage", s.handleGitUnstage)
+	mux.HandleFunc("/api/git/commit", s.handleGitCommit)
+	mux.HandleFunc("/api/git/push", s.handleGitPush)
+	mux.HandleFunc("/api/git/commit-message", s.handleGitCommitMessage)
+	mux.HandleFunc("/api/github/pr", s.handleGitHubPR)
+	mux.HandleFunc("/api/github/action", s.handleGitHubAction)
+	mux.HandleFunc("/api/cloudflare/deploy", s.handleCloudflareDeploy)
 	return s.authMiddleware(mux)
 }
 

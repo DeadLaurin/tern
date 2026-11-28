@@ -36,6 +36,7 @@ const (
 	modalChangelog
 	modalAgentPeek
 	modalProvider
+	modalGit
 )
 
 var reasoningEfforts = []string{"none", "low", "high", "max"}
@@ -161,6 +162,8 @@ func (m *Model) handleModalKey(msg tea.KeyMsg) tea.Cmd {
 		return m.handleAgentPeekKey(msg)
 	case modalProvider:
 		return m.handleProviderModalKey(msg)
+	case modalGit:
+		return m.handleGitModalKey(msg)
 	}
 	return nil
 }
@@ -2558,6 +2561,8 @@ func (m *Model) modalView() string {
 		return m.agentPeekView()
 	case modalProvider:
 		return m.providerModalView()
+	case modalGit:
+		return m.gitModalView()
 	}
 	return ""
 }

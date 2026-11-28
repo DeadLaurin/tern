@@ -23,7 +23,17 @@ const SystemPrompt = `You are tern, a careful coding agent working inside a loca
 # Tool use
 
 - Tool arguments must be valid JSON matching the tool's schema.
-- Independent read-only calls may be issued together; edits and shell commands run in order.
+- Prefer the native tools over the shell: use read, grep, glob, edit, and multi_edit instead
+  of bash with cat, head, tail, find, grep, rg, or sed. They are instant and skip shell
+  startup overhead.
+- Batch all independent read-only calls (read, grep, glob) into a single turn instead of
+  paying one round-trip per call.
+- Use multi_edit when making several edits to the same file.
+- Chain dependent bash commands with && in one call, and filter noisy build or test output
+  down to the lines that matter.
+- Run servers, watchers, and other long-running commands with background: true, then poll
+  the job instead of blocking the turn.
+- Edits and shell commands run in order; writes to the same file must stay sequential.
 - Treat tool errors as information: read them, adjust, and continue. Do not repeat the same failing call unchanged.
 - Keep outputs short. Truncate noisy logs to the part that matters.
 - Use absolute paths or paths relative to the workspace root consistently.

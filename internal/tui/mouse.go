@@ -67,6 +67,7 @@ type overlayHit struct {
 func (m *Model) resetClickTargets() {
 	m.entrySpans = m.entrySpans[:0]
 	m.sidebarAgentRows = make(map[int]string)
+	m.sidebarGitRows = make(map[int]string)
 	m.statusHits = nil
 	m.modalRows = nil
 	m.modalAbsRows = nil
@@ -358,6 +359,35 @@ func (m *Model) handleSidebarMouse(msg tea.MouseMsg) bool {
 	// opens the provider's model picker on multi-model providers).
 	if msg.Y == 1 {
 		m.cycleQuickModel()
+		return true
+	}
+	if target, ok := m.sidebarGitRows[msg.Y]; ok && target != "" {
+		switch target {
+		case "__commit__":
+			m.openGitModal("", true)
+		case "__open__":
+			m.openGitModal("", false)
+		default:
+			m.openGitModal(target, false)
+		}
+		if m.bus != nil {
+			diffCmd := m.loadSelectedGitDiff()
+			statusCmd := m.fetchGitStatusCmd(true)
+			if diffCmd != nil {
+				go func() {
+					if res := diffCmd(); res != nil {
+						m.bus.Push(res)
+					}
+				}()
+			}
+			if statusCmd != nil {
+				go func() {
+					if res := statusCmd(); res != nil {
+						m.bus.Push(res)
+					}
+				}()
+			}
+		}
 		return true
 	}
 	id, ok := m.sidebarAgentRows[msg.Y]
